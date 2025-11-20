@@ -105,6 +105,26 @@
                 <div><span class="text-gray-400">필터 상태:</span> <span id="filter-status" class="font-mono text-purple-400">초기화 중</span></div>
             </div>
 
+            <div class="mb-4 p-3 bg-gray-700 rounded-lg">
+                <label for="variance-threshold-slider" class="block text-sm font-medium text-cyan-300 mb-2">
+                    정지 감지 감도 (Threshold): <span id="variance-threshold-value" class="font-mono text-yellow-300">0.12</span>
+                </label>
+                <input
+                    type="range"
+                    id="variance-threshold-slider"
+                    min="0.01"
+                    max="0.5"
+                    step="0.01"
+                    value="0.12"
+                    class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                />
+                <div class="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>0.01 (민감)</span>
+                    <span>0.12 (기본)</span>
+                    <span>0.5 (둔감)</span>
+                </div>
+            </div>
+
             <div id="log-section" class="hidden my-3">
                  <button id="download-log-button" class="btn w-full bg-gray-600 hover:bg-gray-700 font-bold py-2 px-4 rounded-lg text-sm">
                     로그 다운로드 (<span id="log-count">0</span>개 기록)
@@ -291,6 +311,8 @@
             const debugCount = document.getElementById('debug-count');
             const debugStationary = document.getElementById('debug-stationary');
             const debugVariance = document.getElementById('debug-variance');
+            const varianceThresholdSlider = document.getElementById('variance-threshold-slider');
+            const varianceThresholdValue = document.getElementById('variance-threshold-value');
             
             let logData = [];
             let originLat, originLon, algo;
@@ -304,7 +326,7 @@
             const MIN_MOVE_DISTANCE = 1.0;
             const GPS_UPDATE_INTERVAL = 500;
             const MAX_ACCURACY = 30;
-            const STATIONARY_VARIANCE_THRESHOLD = 0.12;
+            let STATIONARY_VARIANCE_THRESHOLD = 0.12;
             const ACCEL_WINDOW_MS = 1500;
 
             let phoneHeading = 0;
@@ -741,6 +763,12 @@
 
             resetCameraBtn.addEventListener('click', () => {
                 resetCameraToCurrent();
+            });
+
+            varianceThresholdSlider.addEventListener('input', (event) => {
+                const value = parseFloat(event.target.value);
+                STATIONARY_VARIANCE_THRESHOLD = value;
+                varianceThresholdValue.textContent = value.toFixed(2);
             });
 
             startButton.addEventListener('click', async () => {
