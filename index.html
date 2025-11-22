@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS 도보 테스터 (Stable v3)</title>
+    <title>GPS 도보 테스터 (Super Stable)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: pan-x pan-y pinch-zoom; }
@@ -35,7 +35,7 @@
 
     <div class="w-full max-w-lg mx-auto flex flex-col h-full">
         <header class="text-center py-2">
-            <h1 class="text-2xl font-bold text-cyan-400">GPS 테스터 (Stable Mode)</h1>
+            <h1 class="text-2xl font-bold text-cyan-400">GPS 테스터 (Super Stable)</h1>
             <p id="app-status" class="text-gray-400 text-sm">GPS 안정화 중...</p>
         </header>
 
@@ -45,8 +45,8 @@
             <button id="reset-camera-btn" class="absolute top-2 left-1/2 -translate-x-1/2 bg-black/70 text-xs px-3 py-1 rounded-full border border-cyan-500/40">📍 내 위치로</button>
             
             <div class="absolute bottom-2 left-2 bg-black/50 p-2 rounded-lg text-xs leading-tight pointer-events-none">
-                <p><span class="text-green-400">●</span> 나 (Kalman)</p>
-                <p><span class="text-red-400">●</span> 목표 (Target)</p>
+                <p><span class="text-green-400">●</span> 이동 중 (Live)</p>
+                <p><span class="text-red-500">●</span> 정지 (Locked)</p>
                 <p><span class="text-yellow-400">★</span> 최고 신호</p>
             </div>
             
@@ -83,9 +83,9 @@
 
             <div class="mb-3 p-2 bg-gray-700 rounded-lg">
                 <label class="block text-xs font-medium text-cyan-300 mb-1">
-                    GPS 정지 감도 (Variance): <span id="variance-threshold-value" class="font-mono text-white">0.12</span>
+                    GPS 정지 감도 (낮을수록 민감): <span id="variance-threshold-value" class="font-mono text-white">0.30</span>
                 </label>
-                <input type="range" id="variance-threshold-slider" min="0.01" max="0.5" step="0.01" value="0.12" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-500"/>
+                <input type="range" id="variance-threshold-slider" min="0.01" max="1.0" step="0.01" value="0.30" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-500"/>
             </div>
 
             <div id="control-section" class="hidden">
@@ -133,12 +133,11 @@
         };
 
         // ==========================================
-        // 2. Kalman Filter Class (Heavily Tuned for Stability)
+        // 2. Kalman Filter Class
         // ==========================================
         class KalmanFilter {
-            constructor(q = 0.02) { // Q값을 0.1 -> 0.02로 낮춤 (예측 신뢰도 증가, 급격한 변화 억제)
+            constructor(q = 0.02) { 
                 this.q = q; 
-                // R값을 [5,5] -> [15,15]로 높임 (GPS 측정값 노이즈가 크다고 가정)
                 this.R = [[15, 0], [0, 15]]; 
                 this.reset();
             }
@@ -151,13 +150,11 @@
             setStationary(flag) { this.stationary = !!flag; }
             predict(dt) {
                 if (!this.initialized || !dt || dt <= 0) return;
-                const damping = this.stationary ? 0.05 : 0.8; // 정지 시 거의 움직이지 않도록 감쇠 강화
+                const damping = this.stationary ? 0.05 : 0.8;
                 const F = [[1,0,dt,0], [0,1,0,dt], [0,0,damping,0], [0,0,0,damping]];
                 const Ft = transposeMatrix(F);
                 this.x = multiplyMatrixVector(F, this.x);
                 const newP = multiplyMatrices(multiplyMatrices(F, this.P), Ft);
-                
-                // 정지 시 Process Noise를 극도로 낮춰 위치 고정
                 const pNoise = this.stationary ? this.q * 0.0001 : this.q; 
                 const dt2 = dt * dt;
                 const Q = [[pNoise*dt2,0,0,0], [0,pNoise*dt2,0,0], [0,0,pNoise,0], [0,0,0,pNoise]];
@@ -224,13 +221,14 @@
                 TARGET_RSSI: -40.0,
                 STEPS: { FAR: 30.0, MID: 15.0, NEAR: 5.0 },
                 RADII: { FAR: 20.0, MID: 10.0, NEAR: 5.0 },
-                // RSSI_BUF removed for manual input
             };
-            let STAT_THRESH = 0.12;
-            const TARGET_SAMPLES = 20; // 샘플 수 20개로 증가 (초기 안정성 확보)
+            
+            // [변경] 초기값을 0.3으로 둔감하게 설정 (손떨림 방지)
+            let STAT_THRESH = 0.30; 
+            const TARGET_SAMPLES = 20; 
 
             // State
-            let algo, kalman = new KalmanFilter(0.02); // 낮은 Q값으로 시작
+            let algo, kalman = new KalmanFilter(0.02); 
             let origin = null;
             let lastPos = {x:0, y:0}; 
             let camera = { x: 0, y: 0, zoom: 25 };
@@ -429,8 +427,18 @@
                         ctx.fillText("★", algo.bestPos.x, algo.bestPos.y);
                     }
                 }
-                // Me
-                ctx.fillStyle = "#10B981"; ctx.beginPath(); ctx.arc(lastPos.x, lastPos.y, 0.6, 0, Math.PI*2); ctx.fill();
+                
+                // [변경] Me (상태에 따라 색상 변경)
+                // Locked = Red, Moving = Green
+                ctx.fillStyle = isStationary ? "#EF4444" : "#10B981"; 
+                ctx.beginPath(); ctx.arc(lastPos.x, lastPos.y, 0.6, 0, Math.PI*2); ctx.fill();
+                
+                // [변경] 고정됨 표시 링
+                if(isStationary) {
+                    ctx.strokeStyle = "#EF4444"; ctx.lineWidth = 0.1; 
+                    ctx.beginPath(); ctx.arc(lastPos.x, lastPos.y, 1.0, 0, Math.PI*2); ctx.stroke();
+                }
+
                 ctx.restore();
                 requestAnimationFrame(draw);
             }
@@ -442,7 +450,7 @@
                 lastGpsTime = now;
                 const { latitude, longitude, accuracy } = pos.coords;
 
-                // 1. Origin Setup (20 samples for stability)
+                // 1. Origin Setup
                 if(!origin) {
                     if(accuracy > 50) {
                         appStatus.textContent = `신호 약함 (±${accuracy.toFixed(0)}m). 야외로 이동하세요.`;
@@ -462,8 +470,8 @@
                     return;
                 }
 
-                // 2. Stricter Weak Signal Filter
-                if(accuracy > 20) { // 30m -> 20m로 강화 (나쁜 신호는 아예 무시)
+                // 2. Weak Signal Filter
+                if(accuracy > 20) {
                     dbgAcc.textContent = `정확도: ±${accuracy.toFixed(0)}m (거부)`;
                     dbgAcc.className = "text-red-400";
                     return;
@@ -471,17 +479,25 @@
                 dbgAcc.textContent = `정확도: ±${accuracy.toFixed(1)}m`;
                 dbgAcc.className = "text-green-400";
 
-                // 3. Project & Kalman
+                // 3. Project
                 const raw = project(latitude, longitude);
-                
-                // 정지 상태에서 튀는 GPS 무시 (Stronger Sticky Logic)
-                if(isStationary && lastRawMeters) {
-                    const d = Math.hypot(raw.x - lastRawMeters.x, raw.y - lastRawMeters.y);
-                    if(d < 4.0) return; // 2.0m -> 4.0m로 강화 (멈춰있을 땐 4m 튀는 것까지 무시)
-                }
-                lastRawMeters = raw;
                 dbgCoords.textContent = `${raw.x.toFixed(1)}, ${raw.y.toFixed(1)}`;
 
+                // [핵심] 완전 고정 로직 (Super Sticky)
+                // 정지 상태(Locked)라면, GPS 위치를 업데이트하지 않음.
+                // 단, 너무 크게 튄 경우(5m 이상)가 아니라면 무시.
+                if(isStationary) {
+                    if(lastRawMeters) {
+                        const jump = Math.hypot(raw.x - lastRawMeters.x, raw.y - lastRawMeters.y);
+                        // 5m 이내의 움직임은 그냥 무시 (Locked)
+                        if(jump < 5.0) {
+                            return; 
+                        }
+                    }
+                }
+                lastRawMeters = raw;
+
+                // 4. Kalman Update
                 const dt = lastKalmanTime ? (now - lastKalmanTime)/1000 : 0;
                 kalman.predict(dt);
                 kalman.update(raw);
@@ -490,7 +506,7 @@
 
                 if(algo) algo.updatePos(lastPos);
 
-                // 4. Check Arrival
+                // 5. Check Arrival
                 if(algo && !isWaiting && !algo.isFinished) {
                     const dist = Math.hypot(algo.waypoint.x - lastPos.x, algo.waypoint.y - lastPos.y);
                     if(dist < PARAMS.ARRIVAL_DIST) {
@@ -526,10 +542,13 @@
                 if(accelBuf.length > 5) {
                     const avg = accelBuf.reduce((s,i)=>s+i.v,0)/accelBuf.length;
                     const variance = accelBuf.reduce((s,i)=>s+Math.pow(i.v-avg,2),0)/accelBuf.length;
+                    
                     isStationary = variance < STAT_THRESH;
                     kalman.setStationary(isStationary);
+                    
+                    // UI 업데이트
                     dbgStat.textContent = isStationary ? "정지 (Locked)" : "이동 중";
-                    dbgStat.className = isStationary ? "text-red-400" : "text-green-400";
+                    dbgStat.className = isStationary ? "text-red-500 font-bold" : "text-green-400";
                 }
             }
 
