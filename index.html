@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS 도보 테스터 (Field Ready)</title>
+    <title>GPS 도보 테스터 (Field Ready v2)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: pan-x pan-y pinch-zoom; }
@@ -224,6 +224,7 @@
                 // RSSI_BUF removed for manual input
             };
             let STAT_THRESH = 0.12;
+            const TARGET_SAMPLES = 10; // 10개로 증가 (안정성 확보)
 
             // State
             let algo, kalman = new KalmanFilter(0.1);
@@ -439,18 +440,18 @@
                 lastGpsTime = now;
                 const { latitude, longitude, accuracy } = pos.coords;
 
-                // 1. Origin Setup (Accumulate 5 samples)
+                // 1. Origin Setup (Accumulate 10 samples for stability)
                 if(!origin) {
                     if(accuracy > 50) {
                         appStatus.textContent = `신호 약함 (±${accuracy.toFixed(0)}m). 야외로 이동하세요.`;
                         return;
                     }
                     originBuf.push({lat:latitude, lon:longitude});
-                    appStatus.textContent = `GPS 보정 중... ${originBuf.length}/5`;
+                    appStatus.textContent = `GPS 보정 중... ${originBuf.length}/${TARGET_SAMPLES}`;
                     
-                    if(originBuf.length >= 5) {
-                        const avgLat = originBuf.reduce((s,v)=>s+v.lat,0)/5;
-                        const avgLon = originBuf.reduce((s,v)=>s+v.lon,0)/5;
+                    if(originBuf.length >= TARGET_SAMPLES) {
+                        const avgLat = originBuf.reduce((s,v)=>s+v.lat,0) / originBuf.length;
+                        const avgLon = originBuf.reduce((s,v)=>s+v.lon,0) / originBuf.length;
                         origin = {lat: avgLat, lon: avgLon};
                         appStatus.textContent = "준비 완료. 시작 버튼을 누르세요.";
                         startBtn.style.display = "block"; // Show Button!
