@@ -295,10 +295,7 @@
                 process(rssi) {
                     if(this.isFinished) return;
 
-                    // Buffer RSSI
-                    this.rssiBuf.push(rssi);
-                    if(this.rssiBuf.length > PARAMS.RSSI_BUF) this.rssiBuf.shift();
-                    const avgRssi = this.rssiBuf.reduce((a,b)=>a+b,0)/this.rssiBuf.length;
+                    const avgRssi = rssi;
 
                     // Update Best
                     if(avgRssi > this.bestSig) {
