@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS 도보 테스터 (Perfect Lock)</title>
+    <title>GPS 도보 테스터 (Smart Block)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: pan-x pan-y pinch-zoom; }
@@ -35,7 +35,7 @@
 
     <div class="w-full max-w-lg mx-auto flex flex-col h-full">
         <header class="text-center py-2">
-            <h1 class="text-2xl font-bold text-cyan-400">GPS 테스터 (Hard Lock)</h1>
+            <h1 class="text-2xl font-bold text-cyan-400">GPS 테스터 (Smart Block)</h1>
             <p id="app-status" class="text-gray-400 text-sm">GPS 안정화 중...</p>
         </header>
 
@@ -214,8 +214,9 @@
             // Config
             const EARTH_R = 6378137.0;
             const PARAMS = {
-                ARRIVAL_DIST: 2.5,
-                TARGET_RSSI: -40.0,
+                ARRIVAL_DIST: 4.0,    // [수정 1] 도착 인정 반경 확장: 2.5 -> 6.0m
+                TARGET_RSSI: -55.0,   // [수정 3] 성공 목표 하향: -40 -> -55dBm
+                DEAD_ZONE: -80.0,     // [수정 2] No Signal 기준값 (-80 이하면 차단)
                 STEP_FAR: 30.0, STEP_MID: 15.0, STEP_NEAR: 5.0,
                 SCAN_FAR: 30.0, SCAN_MID: 15.0, SCAN_NEAR: 8.0,
             };
@@ -255,7 +256,7 @@
                 return (deg + 360) % 360;
             }
 
-            // --- Ver3 Algorithm ---
+            // --- Ver3 Algorithm (Modified) ---
             class AlgorithmVer3 {
                 constructor(start) {
                     this.pos = start; this.center = start; this.waypoint = start;
@@ -275,13 +276,20 @@
                     if(rssi > this.bestSig) { this.bestSig = rssi; this.bestPos = {...this.pos}; }
                     if(rssi >= PARAMS.TARGET_RSSI) { this.finish("SUCCESS"); return; }
 
+                    // 초기 시작 검증 (-80 미만 시작 금지)
                     if (this.state === "INIT") {
+                        if (rssi < PARAMS.DEAD_ZONE) {
+                            alert("신호가 너무 약합니다 (-80dBm 이상인 곳에서 시작하세요).");
+                            return; 
+                        }
                         this.prevCenterRssi = rssi; this.center = {...this.pos}; this.scanRssi = {};
-                        if(rssi < -50) { this.step = PARAMS.STEP_FAR; this.radius = PARAMS.SCAN_FAR; }
-                        else if(rssi < -40) { this.step = PARAMS.STEP_MID; this.radius = PARAMS.SCAN_MID; }
+                        
+                        // Adaptive Parameters
+                        if(rssi < -65.0) { this.step = PARAMS.STEP_FAR; this.radius = PARAMS.SCAN_FAR; }
+                        else if(rssi < -55.0) { this.step = PARAMS.STEP_MID; this.radius = PARAMS.SCAN_MID; }
                         else { this.step = PARAMS.STEP_NEAR; this.radius = PARAMS.SCAN_NEAR; }
                         
-                        const fullOrder = ['right', 'left', 'up', 'down'];
+                        const fullOrder = ['up', 'right', 'down', 'left'];
                         this.scanQueue = [];
                         fullOrder.forEach(d => {
                             if(d === this.skipDir) this.scanRssi[d] = -999.0;
@@ -289,21 +297,39 @@
                             else this.scanQueue.push(d);
                         });
                         this.failDirName = null; this.failRssi = null;
+                        
                         if(this.scanQueue.length > 0) {
-                            const firstDir = this.scanQueue[0]; this.setWaypoint(this.center, this.dirs[firstDir], this.radius); this.state = "SCANNING";
+                            const firstDir = this.scanQueue[0]; 
+                            this.setWaypoint(this.center, this.dirs[firstDir], this.radius); 
+                            this.state = "SCANNING";
                         } else this.decideNextMove();
                     }
                     else if (this.state === "SCANNING") {
-                        if(this.scanQueue.length > 0) { const doneDir = this.scanQueue.shift(); this.scanRssi[doneDir] = rssi; }
+                        // Save Result
+                        if(this.scanQueue.length > 0) { 
+                            const doneDir = this.scanQueue.shift(); 
+                            this.scanRssi[doneDir] = rssi; 
+                        }
+                        
+                        // Next?
                         if(this.scanQueue.length > 0) {
-                            const nextDir = this.scanQueue[0]; this.setWaypoint(this.center, this.dirs[nextDir], this.radius);
-                        } else this.decideNextMove();
+                            const nextDir = this.scanQueue[0]; 
+                            this.setWaypoint(this.center, this.dirs[nextDir], this.radius);
+                        } else {
+                            this.decideNextMove();
+                        }
                     }
                     else if (this.state === "MOVING_TO_NEXT") {
                         if (rssi >= this.prevCenterRssi - 1.0) {
                             this.prevCenterRssi = rssi; this.center = {...this.pos};
-                            if(rssi > -35) this.step = PARAMS.STEP_NEAR; else if(rssi > -40) this.step = PARAMS.STEP_MID; else this.step = PARAMS.STEP_FAR;
-                            const vec = this.dirs[this.lastMoveDirName]; this.setWaypoint(this.center, vec, this.step * 1.2);
+                            
+                            // Adaptive Step
+                            if(rssi > -65.0) this.step = PARAMS.STEP_NEAR; 
+                            else if(rssi > -75.0) this.step = PARAMS.STEP_MID; 
+                            else this.step = PARAMS.STEP_FAR;
+                            
+                            const vec = this.dirs[this.lastMoveDirName]; 
+                            this.setWaypoint(this.center, vec, this.step * 1.2);
                         } else {
                             this.failRssi = rssi; this.failDirName = this.lastMoveDirName;
                             this.waypoint = {...this.center}; this.state = "RETURNING_TO_BEST";
@@ -313,14 +339,36 @@
                         this.state = "INIT"; this.skipDir = null; this.process(rssi); 
                     }
                 }
+                
                 decideNextMove() {
                     let bestDir = null; let maxRssi = -1000;
-                    for (const [dir, val] of Object.entries(this.scanRssi)) { if (val > maxRssi) { maxRssi = val; bestDir = dir; } }
-                    const vec = this.dirs[bestDir]; this.setWaypoint(this.center, vec, this.step);
+                    
+                    // [수정 2] No Signal(-80) 필터링
+                    // -80 이하인 방향은 후보에서 제외 (maxRssi 갱신 안 함)
+                    for (const [dir, val] of Object.entries(this.scanRssi)) { 
+                        if (val < PARAMS.DEAD_ZONE) continue; // Skip Dead Zones
+                        if (val > maxRssi) { maxRssi = val; bestDir = dir; } 
+                    }
+                    
+                    // 만약 모든 방향이 -80 이하라면? (최악의 경우) -> 가장 덜 나쁜 곳으로?
+                    // 혹은 제자리 스캔? 여기선 가장 덜 나쁜 곳으로 fallback
+                    if (bestDir === null) {
+                        maxRssi = -1000;
+                        for (const [dir, val] of Object.entries(this.scanRssi)) {
+                            if (val > maxRssi) { maxRssi = val; bestDir = dir; }
+                        }
+                    }
+
+                    const vec = this.dirs[bestDir]; 
+                    this.setWaypoint(this.center, vec, this.step);
+                    
                     const reverseMap = {'right':'left', 'left':'right', 'up':'down', 'down':'up'};
-                    this.skipDir = reverseMap[bestDir]; this.lastMoveDirName = bestDir;
+                    this.skipDir = reverseMap[bestDir]; 
+                    this.lastMoveDirName = bestDir;
+                    
                     this.state = "MOVING_TO_NEXT";
                 }
+                
                 setWaypoint(origin, vec, dist) { this.waypoint = { x: origin.x + vec.x * dist, y: origin.y + vec.y * dist }; }
                 finish(reason) { this.state = "FINISHED"; this.isFinished = true; }
                 updatePos(p) {
@@ -367,7 +415,6 @@
                 if (isStationary) {
                     // 정지 상태면 GPS 업데이트 완전 무시 + 칼만 정지
                     kalman.hardStop(); 
-                    // lastPos는 업데이트하지 않음 (그대로 유지)
                     
                     // UI Debug
                     dbgSpd.textContent = "상태: 정지 (고정됨)"; dbgSpd.className = "text-red-500 font-bold";
@@ -416,6 +463,7 @@
                 // 6. Arrival Check
                 if(algo && !isWaiting && !algo.isFinished) {
                     const dist = Math.hypot(algo.waypoint.x - lastPos.x, algo.waypoint.y - lastPos.y);
+                    // [수정 1] 도착 반경 6m 적용
                     if(dist < PARAMS.ARRIVAL_DIST) {
                         isWaiting = true;
                         if(navigator.vibrate) navigator.vibrate(200);
@@ -519,7 +567,7 @@
                         ctx.fillStyle = "#FBBF24"; ctx.font = `${12/camera.zoom}px sans-serif`;
                         ctx.fillText("★", algo.center.x, algo.center.y);
                     }
-                    // Waypoint
+                    // Waypoint (Size increased for arrival visualization)
                     ctx.fillStyle = "#EF4444"; ctx.beginPath(); ctx.arc(algo.waypoint.x, algo.waypoint.y, 0.6, 0, Math.PI*2); ctx.fill();
                     ctx.strokeStyle = "#EF4444"; ctx.lineWidth = 0.1; ctx.beginPath(); ctx.arc(algo.waypoint.x, algo.waypoint.y, PARAMS.ARRIVAL_DIST, 0, Math.PI*2); ctx.stroke();
                 }
