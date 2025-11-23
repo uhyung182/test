@@ -3,650 +3,374 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS 도보 테스터 (Smart Block)</title>
+    <title>GPS 테스터 (Raw Absolute)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; touch-action: pan-x pan-y pinch-zoom; }
-        .btn:active { transform: scale(0.97); }
+        body { font-family: 'Inter', sans-serif; touch-action: none; }
         .map-canvas { background-color: #1a202c; touch-action: none; }
         .compass { 
             width: 60px; height: 60px; 
             border: 2px solid #10B981; border-radius: 50%; 
             position: relative; background: rgba(0,0,0,0.7);
         }
-        .compass::before { 
-            content: '📱'; position: absolute; 
-            top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 16px;
-        }
         .direction-arrow { 
             position: absolute; top: 50%; left: 50%; 
-            width: 4px; height: 25px; background: #EF4444; border-radius: 2px;
+            width: 4px; height: 25px; background: #EF4444; 
             transform-origin: bottom center; transform: translate(-50%, -100%);
-            z-index: 10;
         }
-        .direction-arrow::before { 
-            content: '▲'; position: absolute; top: -10px; left: 50%; 
-            transform: translateX(-50%); color: #EF4444; font-size: 14px;
-        }
-        #reset-camera-btn { pointer-events: auto; }
     </style>
 </head>
-<body class="bg-gray-900 text-white flex flex-col items-center h-screen p-2 sm:p-4">
+<body class="bg-gray-900 text-white flex flex-col h-screen p-4">
 
-    <div class="w-full max-w-lg mx-auto flex flex-col h-full">
-        <header class="text-center py-2">
-            <h1 class="text-2xl font-bold text-cyan-400">GPS 테스터 (Smart Block)</h1>
-            <p id="app-status" class="text-gray-400 text-sm">GPS 안정화 중...</p>
-        </header>
+    <header class="text-center mb-2">
+        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Absolute)</h1>
+        <p id="status" class="text-xs text-gray-400">GPS 대기 중...</p>
+    </header>
 
-        <div class="relative w-full flex-grow rounded-xl overflow-hidden border-2 border-cyan-500/30 my-2">
-            <canvas id="mapCanvas" class="map-canvas"></canvas>
-            
-            <button id="reset-camera-btn" class="absolute top-2 left-1/2 -translate-x-1/2 bg-black/70 text-xs px-3 py-1 rounded-full border border-cyan-500/40">📍 내 위치로</button>
-            
-            <div class="absolute bottom-2 left-2 bg-black/50 p-2 rounded-lg text-xs leading-tight pointer-events-none">
-                <p><span class="text-green-400">●</span> 이동 중</p>
-                <p><span class="text-red-500">●</span> 완전 고정 (Lock)</p>
-                <p><span class="text-yellow-400">★</span> 베이스캠프</p>
-            </div>
-            
-            <div class="absolute top-2 right-2 bg-black/50 p-2 rounded-full text-xs text-center font-sans pointer-events-none">
-                <div class="font-bold text-red-400">N</div>
-                <div>⬆</div>
-            </div>
-            
-            <div class="absolute bottom-2 right-2 bg-black/80 p-3 rounded-lg text-xs font-mono text-green-300 max-w-xs pointer-events-none">
-                <div class="font-bold text-yellow-300 mb-1">GPS Status</div>
-                <div id="debug-accuracy">정확도: -</div>
-                <div id="debug-speed-check">상태: -</div>
-                <div id="debug-coords" class="text-[10px] text-gray-400">-</div>
-            </div>
-            
-            <div class="absolute top-2 left-2 bg-black/50 p-2 rounded-lg">
-                <div class="compass" id="compass">
-                    <div class="direction-arrow" id="direction-arrow"></div>
-                </div>
-                <div class="text-xs text-center mt-1">
-                    <div class="truncate">목표: <span id="bearing-display" class="text-cyan-400 font-bold">0°</span></div>
-                    <div class="truncate">방위: <span id="phone-heading" class="text-green-400 font-bold">0°</span></div>
-                    <div id="turn-guide" class="text-white font-bold mt-1 bg-gray-700 rounded px-1">대기 중</div>
-                </div>
-            </div>
+    <div class="relative flex-grow rounded-xl overflow-hidden border-2 border-gray-700 mb-4">
+        <canvas id="mapCanvas" class="map-canvas"></canvas>
+        
+        <div class="absolute top-2 left-2 bg-black/60 p-2 rounded text-xs">
+            <div class="compass mb-2"><div id="arrow" class="direction-arrow"></div></div>
+            <div>목표: <span id="bearing" class="text-cyan-300">0°</span></div>
+            <div>나: <span id="heading" class="text-green-300">0°</span></div>
         </div>
-
-        <div class="bg-gray-800 rounded-xl p-4 shadow-lg">
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm mb-3">
-                <div>상태: <span id="state-display" class="font-mono text-yellow-300">IDLE</span></div>
-                <div>거리: <span id="distance-display" class="font-mono font-bold text-green-400">0.0 m</span></div>
-                <div>신호: <span id="best-signal-display" class="font-mono text-yellow-400">-</span></div>
-            </div>
-
-            <div class="mb-3 p-2 bg-gray-700 rounded-lg">
-                <label class="block text-xs font-medium text-cyan-300 mb-1">
-                    고정 민감도 (낮을수록 예민): <span id="variance-threshold-value" class="font-mono text-white">0.30</span>
-                </label>
-                <input type="range" id="variance-threshold-slider" min="0.05" max="1.0" step="0.05" value="0.30" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-500"/>
-            </div>
-
-            <div id="control-section" class="hidden">
-                <p id="rssi-prompt" class="text-green-300 font-bold text-center mb-2">목표 도착! RSSI 입력</p>
-                <div class="flex gap-2">
-                    <input type="number" id="rssi-input" class="flex-1 bg-gray-700 border border-gray-600 text-white text-xl font-bold rounded-lg p-2 text-center focus:ring-2 focus:ring-cyan-500" placeholder="-55">
-                    <button id="submit-rssi-button" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg">입력 완료</button>
-                </div>
-            </div>
-            
-            <div id="log-section" class="hidden mt-2">
-                 <button id="download-log-button" class="w-full bg-gray-600 hover:bg-gray-700 text-xs py-2 rounded text-gray-200">
-                    로그 저장 (<span id="log-count">0</span>)
-                </button>
-            </div>
-            
-            <button id="start-button" class="w-full bg-blue-600 hover:bg-blue-700 font-bold py-3 rounded-lg text-lg mt-2 hidden">
-                테스트 시작 (GPS 준비됨)
-            </button>
+        <div class="absolute bottom-2 right-2 bg-black/60 p-2 rounded text-xs text-right">
+            <div id="gps-lat">Lat: -</div>
+            <div id="gps-lon">Lon: -</div>
+            <div id="gps-acc" class="text-yellow-300">Acc: -</div>
         </div>
     </div>
 
+    <div class="bg-gray-800 p-4 rounded-xl space-y-3">
+        <div class="flex justify-between text-sm">
+            <span>상태: <b id="algo-state" class="text-yellow-300">IDLE</b></span>
+            <span>거리: <b id="target-dist" class="text-green-400">0.0m</b></span>
+        </div>
+        
+        <div id="input-area" class="hidden">
+            <p class="text-center text-sm mb-2 text-green-300 font-bold" id="msg">RSSI 입력</p>
+            <div class="flex gap-2">
+                <input type="number" id="rssi-in" class="flex-1 bg-gray-700 p-2 rounded text-center text-white" placeholder="-55">
+                <button id="btn-submit" class="bg-blue-600 px-4 rounded font-bold">입력</button>
+            </div>
+        </div>
+        
+        <button id="btn-start" class="w-full bg-green-600 py-3 rounded font-bold hidden">테스트 시작</button>
+    </div>
+
     <script>
-        // ==========================================
-        // 1. Helper Functions
-        // ==========================================
-        const identityMatrix = (s) => Array.from({length:s},(_,i)=>{const r=Array(s).fill(0);r[i]=1;return r;});
-        const multiplyMatrices = (A, B) => {
-            const r=A.length, c=B[0].length, s=B.length;
-            const res=Array.from({length:r},()=>Array(c).fill(0));
-            for(let i=0;i<r;i++) for(let k=0;k<s;k++) for(let j=0;j<c;j++) res[i][j]+=A[i][k]*B[k][j];
-            return res;
-        };
-        const transposeMatrix = (A) => A[0].map((_, c) => A.map(r => r[c]));
-        const addMatrices = (A, B) => A.map((r, i) => r.map((v, j) => v + B[i][j]));
-        const subtractMatrices = (A, B) => A.map((r, i) => r.map((v, j) => v - B[i][j]));
-        const multiplyMatrixVector = (A, v) => A.map(r => r.reduce((s, val, i) => s + val * v[i], 0));
-        const addVectors = (a, b) => a.map((v, i) => v + b[i]);
-        const subtractVectors = (a, b) => a.map((v, i) => v - b[i]);
-        const invert2x2 = (m) => {
-            const det = m[0][0]*m[1][1] - m[0][1]*m[1][0];
-            if(Math.abs(det)<1e-6) return identityMatrix(2);
-            const invDet=1/det;
-            return [[m[1][1]*invDet, -m[0][1]*invDet], [-m[1][0]*invDet, m[0][0]*invDet]];
+        // --- Constants ---
+        const PARAMS = {
+            ARRIVAL_DIST: 6.0,    // 6m 이내 도착
+            TARGET_RSSI: -55.0,   // 목표 신호
+            DEAD_ZONE: -80.0,     // 탐색 제외
+            // 이동 거리 (미터 단위)
+            STEP: { FAR: 30, MID: 15, NEAR: 5 },
+            SCAN: { FAR: 30, MID: 15, NEAR: 8 }
         };
 
-        // ==========================================
-        // 2. Kalman Filter (With Hard Stop)
-        // ==========================================
-        class KalmanFilter {
-            constructor(q = 0.05) { 
-                this.q = q; 
-                this.R = [[10, 0], [0, 10]]; 
-                this.reset();
-            }
-            reset() {
-                this.x = [0, 0, 0, 0]; // x, y, vx, vy
-                this.P = identityMatrix(4).map(r => r.map(v => v * 1000));
-                this.initialized = false;
-            }
-            // [NEW] 강제 정지: 속도를 0으로 만듦
-            hardStop() {
-                this.x[2] = 0; // vx = 0
-                this.x[3] = 0; // vy = 0
-            }
-            predict(dt) {
-                if (!this.initialized || !dt || dt <= 0) return;
-                const F = [[1,0,dt,0], [0,1,0,dt], [0,0,1,0], [0,0,0,1]];
-                const Ft = transposeMatrix(F);
-                this.x = multiplyMatrixVector(F, this.x);
-                const newP = multiplyMatrices(multiplyMatrices(F, this.P), Ft);
-                const dt2 = dt * dt;
-                const Q = [[this.q*dt2,0,0,0], [0,this.q*dt2,0,0], [0,0,this.q,0], [0,0,0,this.q]];
-                this.P = addMatrices(newP, Q);
-            }
-            update(m) {
-                if (!this.initialized) {
-                    this.x = [m.x, m.y, 0, 0];
-                    this.P = identityMatrix(4);
-                    this.initialized = true;
-                    return;
-                }
-                const H = [[1,0,0,0],[0,1,0,0]];
-                const z = [m.x, m.y];
-                const y = subtractVectors(z, multiplyMatrixVector(H, this.x));
-                const PHt = multiplyMatrices(this.P, transposeMatrix(H));
-                const S = addMatrices(multiplyMatrices(H, PHt), this.R);
-                const K = multiplyMatrices(PHt, invert2x2(S));
-                this.x = addVectors(this.x, multiplyMatrixVector(K, y));
-                const KH = multiplyMatrices(K, H);
-                this.P = multiplyMatrices(subtractMatrices(identityMatrix(4), KH), this.P);
-            }
-            getPosition() { return { x: this.x[0], y: this.x[1] }; }
+        // --- Globals ---
+        let myPos = null;   // {lat, lon}
+        let targetPos = null; // {lat, lon}
+        let centerPos = null; // {lat, lon} 베이스캠프
+        let phoneHeading = 0;
+        
+        let algoState = "IDLE";
+        let scanQueue = [];
+        let scanRssi = {};
+        
+        // Greedy Logic Variables
+        let prevBestRssi = -999;
+        let lastDirName = null;
+        let skipDir = null;
+        let failRssi = null; 
+        let failDir = null;
+
+        // Map View
+        const ZOOM_LEVEL = 18; // 기본 줌 (미터/픽셀 변환용)
+        let pixelsPerMeter = 2.5; // 화면 배율
+
+        // --- Utils ---
+        // Haversine: 두 좌표 사이 거리 (m)
+        function getDist(p1, p2) {
+            if(!p1 || !p2) return 0;
+            const R = 6371e3;
+            const φ1 = p1.lat * Math.PI/180, φ2 = p2.lat * Math.PI/180;
+            const Δφ = (p2.lat-p1.lat) * Math.PI/180;
+            const Δλ = (p2.lon-p1.lon) * Math.PI/180;
+            const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2) * Math.sin(Δλ/2)**2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         }
 
-        // ==========================================
-        // 3. Main Logic
-        // ==========================================
-        document.addEventListener('DOMContentLoaded', () => {
-            const canvas = document.getElementById('mapCanvas');
-            const ctx = canvas.getContext('2d');
-            const startBtn = document.getElementById('start-button');
-            const appStatus = document.getElementById('app-status');
-            
-            // UI
-            const elState = document.getElementById('state-display');
-            const elDist = document.getElementById('distance-display');
-            const elSignal = document.getElementById('best-signal-display');
-            const elHeading = document.getElementById('phone-heading');
-            const elBearing = document.getElementById('bearing-display');
-            const elTurn = document.getElementById('turn-guide');
-            const arrow = document.getElementById('direction-arrow');
-            const dbgAcc = document.getElementById('debug-accuracy');
-            const dbgSpd = document.getElementById('debug-speed-check');
-            const dbgCoords = document.getElementById('debug-coords');
-            const slider = document.getElementById('variance-threshold-slider');
-            const sliderVal = document.getElementById('variance-threshold-value');
+        // Bearing: 두 좌표 사이 방위각 (0~360)
+        function getBearing(p1, p2) {
+            if(!p1 || !p2) return 0;
+            const y = Math.sin(p2.lon*Math.PI/180 - p1.lon*Math.PI/180) * Math.cos(p2.lat*Math.PI/180);
+            const x = Math.cos(p1.lat*Math.PI/180)*Math.sin(p2.lat*Math.PI/180) -
+                      Math.sin(p1.lat*Math.PI/180)*Math.cos(p2.lat*Math.PI/180)*Math.cos(p2.lon*Math.PI/180 - p1.lon*Math.PI/180);
+            return (Math.atan2(y, x) * 180/Math.PI + 360) % 360;
+        }
 
-            const ctrlSec = document.getElementById('control-section');
-            const rssiIn = document.getElementById('rssi-input');
-            const submitBtn = document.getElementById('submit-rssi-button');
-            const logSec = document.getElementById('log-section');
-            const logBtn = document.getElementById('download-log-button');
-            const logCnt = document.getElementById('log-count');
-            
-            // Config
-            const EARTH_R = 6378137.0;
-            const PARAMS = {
-                ARRIVAL_DIST: 4.0,    // [수정 1] 도착 인정 반경 확장: 2.5 -> 6.0m
-                TARGET_RSSI: -55.0,   // [수정 3] 성공 목표 하향: -40 -> -55dBm
-                DEAD_ZONE: -80.0,     // [수정 2] No Signal 기준값 (-80 이하면 차단)
-                STEP_FAR: 30.0, STEP_MID: 15.0, STEP_NEAR: 5.0,
-                SCAN_FAR: 30.0, SCAN_MID: 15.0, SCAN_NEAR: 8.0,
-            };
-            const TARGET_SAMPLES = 20;
-            const MAX_SPEED_MS = 3.0; // 속도 제한
+        // Move: 특정 방위(bearing)로 거리(dist)만큼 이동한 새 좌표
+        function moveCoord(start, bearing, dist) {
+            const R = 6371e3;
+            const δ = dist / R;
+            const θ = bearing * Math.PI/180;
+            const φ1 = start.lat * Math.PI/180;
+            const λ1 = start.lon * Math.PI/180;
+            const φ2 = Math.asin(Math.sin(φ1)*Math.cos(δ) + Math.cos(φ1)*Math.sin(δ)*Math.cos(θ));
+            const λ2 = λ1 + Math.atan2(Math.sin(θ)*Math.sin(δ)*Math.cos(φ1), Math.cos(δ)-Math.sin(φ1)*Math.sin(φ2));
+            return { lat: φ2 * 180/Math.PI, lon: λ2 * 180/Math.PI };
+        }
 
-            // Variables
-            let algo, kalman = new KalmanFilter(0.05); 
-            let origin = null;
-            let lastPos = {x:0, y:0}; 
-            let camera = { x: 0, y: 0, zoom: 25 };
-            
-            // Status
-            let isStationary = false; // True = Red Dot (Locked)
-            let stationaryThreshold = 0.30; // 초기값
-            let isWaiting = false;
-            let phoneHeading = 0;
-            let logData = [];
-            let originBuf = [];
-            let accelBuf = [];
-            let lastGpsTime = 0;
-            let lastKalmanTime = null;
-            let lastAcceptedRaw = null; 
+        // Directions (Bearing)
+        const DIRS = {
+            'up': 0, 'right': 90, 'down': 180, 'left': 270
+        };
 
-            // --- Helpers ---
-            function project(lat, lon) {
-                if (!origin) return {x:0, y:0};
-                const x = (lon - origin.lon) * (EARTH_R * Math.cos(origin.lat * Math.PI / 180)) * (Math.PI / 180);
-                const y = -1 * (lat - origin.lat) * EARTH_R * (Math.PI / 180); 
-                return {x, y};
-            }
+        // --- App Logic ---
+        const cvs = document.getElementById('mapCanvas');
+        const ctx = cvs.getContext('2d');
+        
+        // Resize
+        const resize = () => { cvs.width = cvs.parentElement.clientWidth; cvs.height = cvs.parentElement.clientHeight; };
+        window.addEventListener('resize', resize); resize();
 
-            function getBearing(from, to) {
-                const dx = to.x - from.x;
-                const dy = to.y - from.y; 
-                let deg = (Math.atan2(dy, dx) * 180 / Math.PI) + 90;
-                return (deg + 360) % 360;
-            }
-
-            // --- Ver3 Algorithm (Modified) ---
-            class AlgorithmVer3 {
-                constructor(start) {
-                    this.pos = start; this.center = start; this.waypoint = start;
-                    this.path = [start]; this.state = "INIT"; this.isFinished = false;
-                    this.bestPos = start; this.bestSig = -100.0;
-                    this.scanQueue = []; this.scanRssi = {};
-                    this.radius = PARAMS.SCAN_FAR; this.step = PARAMS.STEP_FAR;
-                    this.prevCenterRssi = -999.0; this.lastMoveDirName = null;
-                    this.skipDir = null; this.failDirName = null; this.failRssi = null;
-                    this.dirs = {
-                        'right': {x:1, y:0, n:'E'}, 'left': {x:-1,y:0, n:'W'},
-                        'up': {x:0, y:-1,n:'N'}, 'down': {x:0, y:1, n:'S'}
-                    };
-                }
-                process(rssi) {
-                    if(this.isFinished) return;
-                    if(rssi > this.bestSig) { this.bestSig = rssi; this.bestPos = {...this.pos}; }
-                    if(rssi >= PARAMS.TARGET_RSSI) { this.finish("SUCCESS"); return; }
-
-                    // 초기 시작 검증 (-80 미만 시작 금지)
-                    if (this.state === "INIT") {
-                        if (rssi < PARAMS.DEAD_ZONE) {
-                            alert("신호가 너무 약합니다 (-80dBm 이상인 곳에서 시작하세요).");
-                            return; 
-                        }
-                        this.prevCenterRssi = rssi; this.center = {...this.pos}; this.scanRssi = {};
-                        
-                        // Adaptive Parameters
-                        if(rssi < -65.0) { this.step = PARAMS.STEP_FAR; this.radius = PARAMS.SCAN_FAR; }
-                        else if(rssi < -55.0) { this.step = PARAMS.STEP_MID; this.radius = PARAMS.SCAN_MID; }
-                        else { this.step = PARAMS.STEP_NEAR; this.radius = PARAMS.SCAN_NEAR; }
-                        
-                        const fullOrder = ['up', 'right', 'down', 'left'];
-                        this.scanQueue = [];
-                        fullOrder.forEach(d => {
-                            if(d === this.skipDir) this.scanRssi[d] = -999.0;
-                            else if(d === this.failDirName) this.scanRssi[d] = this.failRssi;
-                            else this.scanQueue.push(d);
-                        });
-                        this.failDirName = null; this.failRssi = null;
-                        
-                        if(this.scanQueue.length > 0) {
-                            const firstDir = this.scanQueue[0]; 
-                            this.setWaypoint(this.center, this.dirs[firstDir], this.radius); 
-                            this.state = "SCANNING";
-                        } else this.decideNextMove();
-                    }
-                    else if (this.state === "SCANNING") {
-                        // Save Result
-                        if(this.scanQueue.length > 0) { 
-                            const doneDir = this.scanQueue.shift(); 
-                            this.scanRssi[doneDir] = rssi; 
-                        }
-                        
-                        // Next?
-                        if(this.scanQueue.length > 0) {
-                            const nextDir = this.scanQueue[0]; 
-                            this.setWaypoint(this.center, this.dirs[nextDir], this.radius);
-                        } else {
-                            this.decideNextMove();
-                        }
-                    }
-                    else if (this.state === "MOVING_TO_NEXT") {
-                        if (rssi >= this.prevCenterRssi - 1.0) {
-                            this.prevCenterRssi = rssi; this.center = {...this.pos};
-                            
-                            // Adaptive Step
-                            if(rssi > -65.0) this.step = PARAMS.STEP_NEAR; 
-                            else if(rssi > -75.0) this.step = PARAMS.STEP_MID; 
-                            else this.step = PARAMS.STEP_FAR;
-                            
-                            const vec = this.dirs[this.lastMoveDirName]; 
-                            this.setWaypoint(this.center, vec, this.step * 1.2);
-                        } else {
-                            this.failRssi = rssi; this.failDirName = this.lastMoveDirName;
-                            this.waypoint = {...this.center}; this.state = "RETURNING_TO_BEST";
-                        }
-                    }
-                    else if (this.state === "RETURNING_TO_BEST") {
-                        this.state = "INIT"; this.skipDir = null; this.process(rssi); 
-                    }
-                }
-                
-                decideNextMove() {
-                    let bestDir = null; let maxRssi = -1000;
-                    
-                    // [수정 2] No Signal(-80) 필터링
-                    // -80 이하인 방향은 후보에서 제외 (maxRssi 갱신 안 함)
-                    for (const [dir, val] of Object.entries(this.scanRssi)) { 
-                        if (val < PARAMS.DEAD_ZONE) continue; // Skip Dead Zones
-                        if (val > maxRssi) { maxRssi = val; bestDir = dir; } 
-                    }
-                    
-                    // 만약 모든 방향이 -80 이하라면? (최악의 경우) -> 가장 덜 나쁜 곳으로?
-                    // 혹은 제자리 스캔? 여기선 가장 덜 나쁜 곳으로 fallback
-                    if (bestDir === null) {
-                        maxRssi = -1000;
-                        for (const [dir, val] of Object.entries(this.scanRssi)) {
-                            if (val > maxRssi) { maxRssi = val; bestDir = dir; }
-                        }
-                    }
-
-                    const vec = this.dirs[bestDir]; 
-                    this.setWaypoint(this.center, vec, this.step);
-                    
-                    const reverseMap = {'right':'left', 'left':'right', 'up':'down', 'down':'up'};
-                    this.skipDir = reverseMap[bestDir]; 
-                    this.lastMoveDirName = bestDir;
-                    
-                    this.state = "MOVING_TO_NEXT";
-                }
-                
-                setWaypoint(origin, vec, dist) { this.waypoint = { x: origin.x + vec.x * dist, y: origin.y + vec.y * dist }; }
-                finish(reason) { this.state = "FINISHED"; this.isFinished = true; }
-                updatePos(p) {
-                    if(!this.path.length) this.path.push(p);
-                    const last = this.path[this.path.length-1];
-                    if(Math.hypot(p.x-last.x, p.y-last.y) > 0.5) { this.pos = p; this.path.push(p); } else { this.pos = p; }
-                }
-            }
-
-            // --- Handlers ---
-            function handleGps(pos) {
-                const now = Date.now();
-                if(now - lastGpsTime < 200) return;
-                
+        // GPS Handler
+        navigator.geolocation.watchPosition(
+            pos => {
                 const { latitude, longitude, accuracy } = pos.coords;
+                myPos = { lat: latitude, lon: longitude };
+                
+                document.getElementById('gps-lat').innerText = `Lat: ${latitude.toFixed(5)}`;
+                document.getElementById('gps-lon').innerText = `Lon: ${longitude.toFixed(5)}`;
+                document.getElementById('gps-acc').innerText = `Acc: ±${accuracy.toFixed(1)}m`;
+                
+                // 시작 버튼 활성화 (최초 1회)
+                document.getElementById('btn-start').classList.remove('hidden');
+                document.getElementById('status').innerText = "GPS 수신 중";
 
-                // 1. Init Origin
-                if(!origin) {
-                    if(accuracy > 50) { appStatus.textContent = `신호 약함 (±${accuracy.toFixed(0)}m). 야외로 이동하세요.`; return; }
-                    originBuf.push({lat:latitude, lon:longitude});
-                    appStatus.textContent = `GPS 안정화 중... ${originBuf.length}/${TARGET_SAMPLES}`;
-                    if(originBuf.length >= TARGET_SAMPLES) {
-                        const avgLat = originBuf.reduce((s,v)=>s+v.lat,0)/originBuf.length;
-                        const avgLon = originBuf.reduce((s,v)=>s+v.lon,0)/originBuf.length;
-                        origin = {lat: avgLat, lon: avgLon};
-                        appStatus.textContent = "준비 완료. 시작 버튼을 누르세요.";
-                        startBtn.style.display = "block";
-                        requestAnimationFrame(draw);
-                    }
-                    lastGpsTime = now; return;
-                }
-
-                // 2. Filter Bad Accuracy
-                if(accuracy > 30) { 
-                    dbgAcc.textContent = `정확도: ±${accuracy.toFixed(0)}m (거부)`; dbgAcc.className = "text-red-400"; return; 
-                }
-                dbgAcc.textContent = `정확도: ±${accuracy.toFixed(1)}m`; dbgAcc.className = "text-green-400";
-
-                // 3. Project
-                const raw = project(latitude, longitude);
-                dbgCoords.textContent = `${raw.x.toFixed(1)}, ${raw.y.toFixed(1)}`;
-
-                // [CRITICAL CHANGE] Hard Lock Logic
-                if (isStationary) {
-                    // 정지 상태면 GPS 업데이트 완전 무시 + 칼만 정지
-                    kalman.hardStop(); 
+                // 도착 체크
+                if (targetPos && algoState !== "IDLE") {
+                    const d = getDist(myPos, targetPos);
+                    document.getElementById('target-dist').innerText = d.toFixed(1) + "m";
                     
-                    // UI Debug
-                    dbgSpd.textContent = "상태: 정지 (고정됨)"; dbgSpd.className = "text-red-500 font-bold";
-                    
-                    // 화면 다시 그리기 (UI 갱신용)
-                    updateUI();
-                    return; // 여기서 함수 종료!
-                }
-
-                // --- 이하 이동 중일 때만 실행 ---
-
-                // 4. Speed Limit Check
-                let accept = true;
-                let speed = 0;
-                if(lastAcceptedRaw) {
-                    const timeDelta = (now - lastGpsTime) / 1000;
-                    const distChange = Math.hypot(raw.x - lastAcceptedRaw.x, raw.y - lastAcceptedRaw.y);
-                    if(timeDelta > 0) {
-                        speed = distChange / timeDelta;
-                        if(speed > MAX_SPEED_MS) {
-                            accept = false;
-                            dbgSpd.textContent = `상태: 속도초과 ${speed.toFixed(1)}m/s`; dbgSpd.className = "text-yellow-400";
-                        } else if(distChange < 1.0) {
-                            accept = false; // 너무 작은 움직임 무시
-                            dbgSpd.textContent = "상태: 미소 이동"; dbgSpd.className = "text-yellow-400";
-                        } else {
-                            dbgSpd.textContent = `상태: 이동 중 ${speed.toFixed(1)}m/s`; dbgSpd.className = "text-green-400";
-                        }
-                    }
-                } else { lastAcceptedRaw = raw; }
-
-                lastGpsTime = now;
-
-                // 5. Kalman Update
-                const dt = lastKalmanTime ? (now - lastKalmanTime)/1000 : 0;
-                kalman.predict(dt);
-                if(accept) {
-                    kalman.update(raw);
-                    lastAcceptedRaw = raw;
-                }
-                lastKalmanTime = now;
-                lastPos = kalman.getPosition();
-
-                if(algo) algo.updatePos(lastPos);
-
-                // 6. Arrival Check
-                if(algo && !isWaiting && !algo.isFinished) {
-                    const dist = Math.hypot(algo.waypoint.x - lastPos.x, algo.waypoint.y - lastPos.y);
-                    // [수정 1] 도착 반경 6m 적용
-                    if(dist < PARAMS.ARRIVAL_DIST) {
-                        isWaiting = true;
+                    if (d < PARAMS.ARRIVAL_DIST) {
+                        // 도착!
+                        document.getElementById('input-area').classList.remove('hidden');
+                        document.getElementById('msg').innerText = "도착! RSSI 입력";
                         if(navigator.vibrate) navigator.vibrate(200);
-                        ctrlSec.classList.remove("hidden");
-                        rssiIn.focus();
-                        let msg = "목표 도착! RSSI 입력";
-                        if(algo.state==="SCANNING") msg = `스캔 지점 도착! RSSI 입력`;
-                        if(algo.state==="MOVING_TO_NEXT") msg = "직진 지점 도착! 신호 확인";
-                        if(algo.state==="RETURNING_TO_BEST") msg = "복귀 완료! 다시 스캔";
-                        document.getElementById('rssi-prompt').textContent = msg;
                     }
                 }
-                updateUI();
-            }
+                draw();
+            },
+            err => alert("GPS Error: " + err.message),
+            { enableHighAccuracy: true, maximumAge: 0 }
+        );
 
-            function handleMotion(e) {
-                const a = e.acceleration || e.accelerationIncludingGravity;
-                if(!a) return;
-                const mag = Math.hypot(a.x||0, a.y||0, a.z||0);
-                accelBuf.push({t:Date.now(), v:mag});
-                while(accelBuf.length && Date.now()-accelBuf[0].t > 1500) accelBuf.shift();
+        // Orientation
+        window.addEventListener('deviceorientation', e => {
+            if(e.webkitCompassHeading) phoneHeading = e.webkitCompassHeading;
+            else if(e.alpha) phoneHeading = (360 - e.alpha) % 360;
+            document.getElementById('heading').innerText = phoneHeading.toFixed(0) + "°";
+            draw();
+        });
+
+        // Draw Map
+        function draw() {
+            if (!myPos) return;
+            ctx.clearRect(0, 0, cvs.width, cvs.height);
+            
+            const cx = cvs.width / 2;
+            const cy = cvs.height / 2;
+
+            // Grid
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cx, 0); ctx.lineTo(cx, cvs.height);
+            ctx.moveTo(0, cy); ctx.lineTo(cvs.width, cy);
+            ctx.stroke();
+
+            // Target
+            if (targetPos) {
+                // 내 위치(myPos)가 항상 화면 중앙(cx, cy)임.
+                // 타겟의 상대 위치 계산 (미터 단위 -> 픽셀 변환)
+                const d = getDist(myPos, targetPos);
+                const b = getBearing(myPos, targetPos);
                 
-                if(accelBuf.length > 5) {
-                    const avg = accelBuf.reduce((s,i)=>s+i.v,0)/accelBuf.length;
-                    const variance = accelBuf.reduce((s,i)=>s+Math.pow(i.v-avg,2),0)/accelBuf.length;
-                    
-                    // Variance가 임계값보다 낮으면 '정지'로 판단
-                    isStationary = variance < stationaryThreshold;
-                }
-            }
-
-            function handleOrientation(e) {
-                if(e.webkitCompassHeading!==undefined && e.webkitCompassHeading!==null) phoneHeading = e.webkitCompassHeading;
-                else if(e.alpha!==null) phoneHeading = (360 - e.alpha) % 360;
-                elHeading.textContent = `${phoneHeading.toFixed(0)}°`;
-                updateUI();
-            }
-
-            // --- Visualization ---
-            function updateUI() {
-                if(!algo || !lastPos) return;
-                let status = algo.state;
-                if(algo.state === "SCANNING") status = `탐색 중 (${algo.scanQueue.length} 남음)`;
-                if(algo.state === "MOVING_TO_NEXT") status = `최적 방향 직진 (Greedy)`;
-                if(algo.state === "RETURNING_TO_BEST") status = `복귀 중 (Backtrack)`;
-                if(algo.state === "FINISHED") status = "완료!";
-                elState.textContent = status;
+                // 화면상 좌표 (북쪽이 위)
+                // bearing 0(N) -> dy -, dx 0
+                // bearing 90(E) -> dy 0, dx +
+                const rad = (b - 90) * Math.PI / 180; // Canvas는 0도가 3시 방향이라 보정
+                const tx = cx + Math.cos(rad) * d * pixelsPerMeter; // 90도 회전? 아니, bearing 그대로 씀
                 
-                const dist = Math.hypot(algo.waypoint.x - lastPos.x, algo.waypoint.y - lastPos.y);
-                elDist.textContent = `${dist.toFixed(1)} m`;
-                elSignal.textContent = algo.bestSig > -100 ? `${algo.bestSig.toFixed(1)} dBm` : '-';
-                
-                const targetBearing = getBearing(lastPos, algo.waypoint);
-                elBearing.textContent = `${targetBearing.toFixed(0)}°`;
-                let diff = targetBearing - phoneHeading;
-                arrow.style.transform = `translate(-50%, -100%) rotate(${diff}deg)`;
-                
-                let guideDiff = diff;
-                while(guideDiff <= -180) guideDiff += 360;
-                while(guideDiff > 180) guideDiff -= 360;
-                if(Math.abs(guideDiff) < 15) {
-                    elTurn.textContent = "⬆ 직진"; elTurn.className = "text-white font-bold mt-1 bg-green-600 rounded px-2 py-1";
-                } else {
-                    const dir = guideDiff > 0 ? "우회전" : "좌회전";
-                    elTurn.textContent = `${dir} ${Math.abs(guideDiff).toFixed(0)}°`;
-                    elTurn.className = "text-white font-bold mt-1 bg-red-500 rounded px-2 py-1";
-                }
-            }
+                // Bearing to XY:
+                // 0 deg (Up) -> x=0, y=-d
+                // 90 deg (Right) -> x=d, y=0
+                const bx = Math.sin(b * Math.PI/180) * d * pixelsPerMeter;
+                const by = -Math.cos(b * Math.PI/180) * d * pixelsPerMeter;
 
-            function draw() {
-                if(!origin) { requestAnimationFrame(draw); return; }
-                const w = canvas.width, h = canvas.height;
-                ctx.clearRect(0,0,w,h);
-                ctx.save();
-                ctx.translate(w/2, h/2);
-                ctx.scale(camera.zoom, camera.zoom);
-                ctx.translate(-camera.x, -camera.y);
-
-                // Grid
-                ctx.strokeStyle = "rgba(255,255,255,0.1)"; ctx.lineWidth = 1/camera.zoom;
-                const gridSize = 10;
-                const b = { l: camera.x - (w/2/camera.zoom), r: camera.x + (w/2/camera.zoom), t: camera.y - (h/2/camera.zoom), b: camera.y + (h/2/camera.zoom) };
-                const startX = Math.floor(b.l/gridSize)*gridSize; const startY = Math.floor(b.t/gridSize)*gridSize;
+                ctx.fillStyle = 'red';
+                ctx.beginPath(); 
+                ctx.arc(cx + bx, cy + by, 8, 0, Math.PI*2); 
+                ctx.fill();
+                
+                // Arrival Zone
+                ctx.strokeStyle = 'red';
                 ctx.beginPath();
-                for(let x=startX; x<b.r; x+=gridSize) { ctx.moveTo(x, b.t); ctx.lineTo(x, b.b); }
-                for(let y=startY; y<b.b; y+=gridSize) { ctx.moveTo(b.l, y); ctx.lineTo(b.r, y); }
+                ctx.arc(cx + bx, cy + by, PARAMS.ARRIVAL_DIST * pixelsPerMeter, 0, Math.PI*2);
                 ctx.stroke();
 
-                if(algo) {
-                    // Path
-                    if(algo.path.length > 1) {
-                        ctx.strokeStyle = "#6B7280"; ctx.lineWidth = 2/camera.zoom;
-                        ctx.beginPath(); ctx.moveTo(algo.path[0].x, algo.path[0].y);
-                        for(let i=1; i<algo.path.length; i++) ctx.lineTo(algo.path[i].x, algo.path[i].y);
-                        ctx.stroke();
-                    }
-                    // Center
-                    if(algo.center && !algo.isFinished) {
-                        ctx.strokeStyle = "rgba(251, 191, 36, 0.6)"; ctx.lineWidth = 1/camera.zoom;
-                        ctx.beginPath(); ctx.arc(algo.center.x, algo.center.y, algo.radius, 0, Math.PI*2); ctx.stroke();
-                        ctx.fillStyle = "#FBBF24"; ctx.font = `${12/camera.zoom}px sans-serif`;
-                        ctx.fillText("★", algo.center.x, algo.center.y);
-                    }
-                    // Waypoint (Size increased for arrival visualization)
-                    ctx.fillStyle = "#EF4444"; ctx.beginPath(); ctx.arc(algo.waypoint.x, algo.waypoint.y, 0.6, 0, Math.PI*2); ctx.fill();
-                    ctx.strokeStyle = "#EF4444"; ctx.lineWidth = 0.1; ctx.beginPath(); ctx.arc(algo.waypoint.x, algo.waypoint.y, PARAMS.ARRIVAL_DIST, 0, Math.PI*2); ctx.stroke();
-                }
-                
-                // Me (Color: Red=Locked, Green=Moving)
-                ctx.fillStyle = isStationary ? "#EF4444" : "#10B981"; 
-                ctx.beginPath(); ctx.arc(lastPos.x, lastPos.y, 0.6, 0, Math.PI*2); ctx.fill();
-                if(isStationary) {
-                    ctx.strokeStyle = "#EF4444"; ctx.lineWidth = 0.1; 
-                    ctx.beginPath(); ctx.arc(lastPos.x, lastPos.y, 1.0, 0, Math.PI*2); ctx.stroke();
-                }
-
-                ctx.restore();
-                requestAnimationFrame(draw);
+                // Update Compass UI
+                const targetB = getBearing(myPos, targetPos);
+                document.getElementById('bearing').innerText = targetB.toFixed(0) + "°";
+                const arrowDeg = targetB - phoneHeading;
+                document.getElementById('arrow').style.transform = `translate(-50%, -100%) rotate(${arrowDeg}deg)`;
             }
 
-            // --- Init ---
-            const setupCanvas = () => { canvas.width = canvas.parentElement.clientWidth; canvas.height = canvas.parentElement.clientHeight; };
-            window.addEventListener('resize', setupCanvas);
-            setupCanvas();
+            // Me (Always Center)
+            ctx.fillStyle = '#10B981';
+            ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill();
+        }
 
-            // Start GPS immediately
-            if (navigator.geolocation) {
-                navigator.geolocation.watchPosition(handleGps, 
-                    (err) => { console.error(err); appStatus.textContent = "GPS 오류: " + err.message; }, 
-                    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-                );
-            } else { appStatus.textContent = "GPS 미지원"; }
+        // --- Algorithm (Ver3 Logic) ---
+        const processAlgo = (rssi) => {
+            if (rssi >= PARAMS.TARGET_RSSI) {
+                alert("탐색 성공! (-55dBm 도달)");
+                algoState = "FINISHED";
+                return;
+            }
 
-            startBtn.addEventListener('click', async () => {
-                if(!origin) return;
-                algo = new AlgorithmVer3({x:0, y:0}); kalman.reset(); lastPos = {x:0, y:0}; lastKalmanTime = null; logData = [];
-                startBtn.style.display = "none"; logSec.classList.remove("hidden");
-                if (typeof DeviceOrientationEvent?.requestPermission === 'function') { try { await DeviceOrientationEvent.requestPermission(); } catch(e){ console.warn(e); } }
-                window.addEventListener('deviceorientation', handleOrientation);
-                if (typeof DeviceMotionEvent?.requestPermission === 'function') { try { await DeviceMotionEvent.requestPermission(); } catch(e){ console.warn(e); } }
-                window.addEventListener('devicemotion', handleMotion, {passive:true});
-                isWaiting = true; ctrlSec.classList.remove("hidden");
-                document.getElementById('rssi-prompt').textContent = "시작점(중심) RSSI 입력";
-            });
+            // 1. INIT
+            if (algoState === "INIT") {
+                if (rssi < PARAMS.DEAD_ZONE) { alert("신호 너무 약함"); return; }
+                
+                centerPos = { ...myPos };
+                prevBestRssi = rssi;
+                scanRssi = {};
+                
+                // Adaptive Radius
+                let r = PARAMS.SCAN.FAR;
+                if(rssi > -65) r = PARAMS.SCAN.NEAR;
+                else if(rssi > -75) r = PARAMS.SCAN.MID;
 
-            submitBtn.addEventListener('click', () => {
-                const val = parseFloat(rssiIn.value);
-                if(isNaN(val)) { alert("값 입력 필요"); return; }
-                logData.push({ time: new Date().toISOString(), rssi: val, state: algo.state, pos: {...algo.pos}, target: {...algo.waypoint}, best: algo.bestSig });
-                logCnt.textContent = logData.length;
-                algo.process(val);
-                rssiIn.value = ""; ctrlSec.classList.add("hidden"); isWaiting = false;
-                if(algo.isFinished) alert("탐색 종료! RSSI 만족"); else appStatus.textContent = "이동하세요";
-                updateUI();
-            });
+                // Queue: Up, Right, Down, Left
+                const order = ['up', 'right', 'down', 'left'];
+                scanQueue = order.filter(d => d !== skipDir && d !== failDir);
+                
+                // Reuse failed data if exists
+                if(failDir) scanRssi[failDir] = failRssi;
+                failDir = null;
 
-            // Touch & Slider
-            let touchState = { d:0, z:25, pan:false, start:{x:0,y:0}, cam:{x:0,y:0} };
-            canvas.addEventListener('touchstart', e => {
-                if(e.touches.length===1) { touchState.pan=true; touchState.start={x:e.touches[0].clientX, y:e.touches[0].clientY}; touchState.cam={...camera}; }
-                else if(e.touches.length===2) { touchState.pan=false; touchState.d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY); touchState.z = camera.zoom; }
-            }, {passive:false});
-            canvas.addEventListener('touchmove', e => {
-                e.preventDefault();
-                if(e.touches.length===1 && touchState.pan) {
-                    const dx = (e.touches[0].clientX - touchState.start.x)/camera.zoom;
-                    const dy = (e.touches[0].clientY - touchState.start.y)/camera.zoom;
-                    camera.x = touchState.cam.x - dx; camera.y = touchState.cam.y - dy;
-                } else if(e.touches.length===2) {
-                    const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
-                    camera.zoom = Math.max(5, Math.min(100, touchState.z * (d/touchState.d)));
+                if(scanQueue.length > 0) {
+                    const nextDir = scanQueue[0];
+                    targetPos = moveCoord(centerPos, DIRS[nextDir], r);
+                    algoState = "SCANNING";
+                } else decide();
+            }
+            
+            // 2. SCANNING
+            else if (algoState === "SCANNING") {
+                const done = scanQueue.shift();
+                scanRssi[done] = rssi;
+                
+                if (scanQueue.length > 0) {
+                    const next = scanQueue[0];
+                    // 반경 재계산 필요 없음 (같은 중심)
+                    let r = PARAMS.SCAN.FAR; // Simple fallback
+                    if(prevBestRssi > -65) r = PARAMS.SCAN.NEAR;
+                    else if(prevBestRssi > -75) r = PARAMS.SCAN.MID;
+
+                    targetPos = moveCoord(centerPos, DIRS[next], r);
+                } else {
+                    decide();
                 }
-            }, {passive:false});
-            document.getElementById('reset-camera-btn').addEventListener('click', () => { if(lastPos) { camera.x = lastPos.x; camera.y = lastPos.y; camera.zoom = 25; } });
-            document.getElementById('download-log-button').addEventListener('click', () => {
-                const blob = new Blob([JSON.stringify(logData, null, 2)], {type:'application/json'});
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'walk_test_log.json'; a.click();
-            });
-            slider.addEventListener('input', e => { 
-                stationaryThreshold = parseFloat(e.target.value); 
-                sliderVal.textContent = stationaryThreshold.toFixed(2);
-            });
-        });
+            }
+
+            // 3. MOVING (Greedy)
+            else if (algoState === "MOVING") {
+                // Check if improved
+                if (rssi >= prevBestRssi - 1.0) {
+                    // Good! Keep going
+                    prevBestRssi = rssi;
+                    centerPos = { ...myPos }; // Update Base
+                    
+                    let step = PARAMS.STEP.FAR;
+                    if(rssi > -65) step = PARAMS.STEP.NEAR;
+                    else if(rssi > -75) step = PARAMS.STEP.MID;
+
+                    targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 1.2);
+                } else {
+                    // Bad! Backtrack
+                    failRssi = rssi;
+                    failDir = lastDirName;
+                    targetPos = { ...centerPos }; // Go back
+                    algoState = "BACKTRACK";
+                }
+            }
+
+            // 4. BACKTRACK
+            else if (algoState === "BACKTRACK") {
+                // Arrived back at center. Restart Scan.
+                algoState = "INIT";
+                skipDir = null; 
+                processAlgo(rssi); // Recursion with current(center) rssi
+            }
+
+            document.getElementById('algo-state').innerText = algoState;
+            draw();
+        };
+
+        function decide() {
+            let bestDir = null, max = -999;
+            for(let d in scanRssi) {
+                if(scanRssi[d] > PARAMS.DEAD_ZONE && scanRssi[d] > max) {
+                    max = scanRssi[d]; bestDir = d;
+                }
+            }
+            
+            if (!bestDir) { alert("모든 방향 신호 없음. 이동 불가."); return; }
+
+            let step = PARAMS.STEP.FAR;
+            if(max > -65) step = PARAMS.STEP.NEAR;
+            else if(max > -75) step = PARAMS.STEP.MID;
+
+            targetPos = moveCoord(centerPos, DIRS[bestDir], step);
+            lastDirName = bestDir;
+            
+            // Set Skip (Opposite)
+            if(bestDir=='up') skipDir='down';
+            if(bestDir=='down') skipDir='up';
+            if(bestDir=='left') skipDir='right';
+            if(bestDir=='right') skipDir='left';
+
+            algoState = "MOVING";
+        }
+
+        // --- Inputs ---
+        document.getElementById('btn-start').onclick = () => {
+            if(!myPos) return;
+            document.getElementById('btn-start').classList.add('hidden');
+            document.getElementById('input-area').classList.remove('hidden');
+            document.getElementById('msg').innerText = "시작점 RSSI 입력";
+            algoState = "INIT";
+            document.getElementById('algo-state').innerText = algoState;
+            
+            // iOS Permission
+            if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission();
+            }
+        };
+
+        document.getElementById('btn-submit').onclick = () => {
+            const val = parseFloat(document.getElementById('rssi-in').value);
+            if(!val) return;
+            document.getElementById('input-area').classList.add('hidden');
+            document.getElementById('rssi-in').value = '';
+            processAlgo(val);
+        };
     </script>
 </body>
 </html>
