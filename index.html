@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS Raw (Icons & Numbers)</title>
+    <title>GPS Pro (Waypoint Numbers)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: none; }
@@ -23,7 +23,7 @@
 <body class="bg-gray-900 text-white flex flex-col h-screen p-4">
 
     <header class="text-center mb-2">
-        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Icons & Numbers)</h1>
+        <h1 class="text-xl font-bold text-cyan-400">GPS Pro (Waypoint Numbers)</h1>
         <p id="status" class="text-xs text-gray-400">GPS 대기 중...</p>
     </header>
 
@@ -79,7 +79,10 @@
         let centerPos = null; 
         let originPos = null; 
         let phoneHeading = 0;
-        let pathHistory = []; 
+        
+        // [DATA STRUCTURES]
+        let pathHistory = [];      // 이동한 모든 GPS 좌표 (회색 선 그리기용)
+        let visitedWaypoints = []; // RSSI를 입력한 지점들 (숫자 마커용)
         let logData = []; 
 
         let algoState = "IDLE";
@@ -128,6 +131,7 @@
             if (!originPos) return { x: 0, y: 0 };
             const d = getDist(originPos, pos);
             const b = getBearing(originPos, pos);
+            const rad = (b - 90) * Math.PI / 180; 
             const radB = (b - 90) * Math.PI / 180;
             return {
                 x: d * Math.cos(radB),
@@ -151,7 +155,7 @@
                 
                 if (!originPos) originPos = { ...myPos }; 
                 
-                // [FIX] 중복 좌표 방지 (너무 가까우면 저장 안 함)
+                // Raw Path History (단순 이동 경로)
                 if (pathHistory.length === 0 || getDist(pathHistory[pathHistory.length-1], myPos) > 2.0) {
                     pathHistory.push({ ...myPos });
                 }
@@ -163,7 +167,7 @@
                 document.getElementById('btn-start').classList.remove('hidden');
                 document.getElementById('status').innerText = "GPS 수신 중";
 
-                if (targetPos && algoState !== "IDLE") {
+                if (targetPos && algoState !== "IDLE" && algoState !== "FINISHED") {
                     const d = getDist(myPos, targetPos);
                     document.getElementById('target-dist').innerText = d.toFixed(1) + "m";
                     if (d < PARAMS.ARRIVAL_DIST) {
@@ -222,10 +226,9 @@
             }
             ctx.stroke();
 
-            // 2. Path & Numbers
+            // 2. Raw Path (Gray Line)
             if (pathHistory.length > 0) {
-                // Draw Line
-                ctx.strokeStyle = '#888';
+                ctx.strokeStyle = '#555';
                 ctx.lineWidth = 2 / cam.zoom;
                 ctx.beginPath();
                 const start = latlonToXY(pathHistory[0]);
@@ -235,58 +238,62 @@
                     ctx.lineTo(p.x, p.y);
                 }
                 ctx.stroke();
-
-                // Draw Numbers (Waypoints)
-                ctx.fillStyle = '#FFF';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.font = `${12/cam.zoom}px Arial`;
-                
-                pathHistory.forEach((pos, idx) => {
-                    const p = latlonToXY(pos);
-                    ctx.beginPath();
-                    ctx.fillStyle = '#555';
-                    ctx.arc(p.x, p.y, 8/cam.zoom, 0, Math.PI*2);
-                    ctx.fill();
-                    ctx.fillStyle = '#FFF';
-                    ctx.fillText(idx + 1, p.x, p.y);
-                });
-
-                // [NEW] Start Point (Yellow Star)
-                const s = latlonToXY(pathHistory[0]);
-                ctx.fillStyle = '#FFD700'; // Gold
-                ctx.font = `${20/cam.zoom}px Arial`;
-                ctx.fillText('★', s.x, s.y - 15/cam.zoom);
             }
 
-            // 3. Target (Current)
+            // 3. Visited Waypoints (Start Icon + Numbers)
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            visitedWaypoints.forEach((pos, idx) => {
+                const p = latlonToXY(pos);
+                
+                if (idx === 0) {
+                    // Start Point (Yellow Star)
+                    ctx.fillStyle = '#FFD700'; 
+                    ctx.font = `${24/cam.zoom}px Arial`;
+                    ctx.fillText('★', p.x, p.y);
+                } else if (idx === visitedWaypoints.length - 1 && algoState === "FINISHED") {
+                    // End Point (Blue Star) - if finished
+                    ctx.fillStyle = '#3B82F6'; 
+                    ctx.font = `${24/cam.zoom}px Arial`;
+                    ctx.fillText('★', p.x, p.y);
+                } else {
+                    // Normal Waypoint (Gray Circle + Number)
+                    ctx.beginPath();
+                    ctx.fillStyle = '#777';
+                    ctx.arc(p.x, p.y, 8/cam.zoom, 0, Math.PI*2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = '#FFF';
+                    ctx.font = `${10/cam.zoom}px Arial`;
+                    ctx.fillText(idx, p.x, p.y); // Index starts from 1 (after Start)
+                }
+            });
+
+            // 4. Current Target (Red Dot)
             if (targetPos && algoState !== "FINISHED") {
                 const t = latlonToXY(targetPos);
+                
+                // Red Dot
                 ctx.fillStyle = 'red';
                 ctx.beginPath(); ctx.arc(t.x, t.y, 6 / cam.zoom, 0, Math.PI*2); ctx.fill();
                 
+                // Arrival Zone
                 ctx.strokeStyle = 'red';
                 ctx.lineWidth = 1 / cam.zoom;
                 ctx.beginPath(); ctx.arc(t.x, t.y, PARAMS.ARRIVAL_DIST, 0, Math.PI*2); ctx.stroke();
 
+                // Update Compass Arrow
                 const targetB = getBearing(myPos, targetPos);
                 document.getElementById('bearing').innerText = targetB.toFixed(0) + "°";
                 const arrowDeg = targetB - phoneHeading;
                 document.getElementById('arrow').style.transform = `translate(-50%, -100%) rotate(${arrowDeg}deg)`;
             }
 
-            // 4. Me
+            // 5. Me (Green Dot)
             const m = latlonToXY(myPos);
             ctx.fillStyle = '#10B981';
             ctx.beginPath(); ctx.arc(m.x, m.y, 8 / cam.zoom, 0, Math.PI*2); ctx.fill();
-
-            // [NEW] End Point (Blue Star) - Only when Finished
-            if (algoState === "FINISHED") {
-                const last = latlonToXY(myPos);
-                ctx.fillStyle = '#3B82F6'; // Blue
-                ctx.font = `${24/cam.zoom}px Arial`;
-                ctx.fillText('★', last.x, last.y - 20/cam.zoom);
-            }
 
             ctx.restore();
         }
@@ -335,28 +342,41 @@
             draw();
         };
 
-        // --- Algorithm ---
+        // --- Algorithm (Ver3 Logic) ---
         const processAlgo = (rssi) => {
+            // [LOGIC FIX] 사용자가 도착해서 RSSI를 입력했다는 것은,
+            // 현재 위치(혹은 직전 타겟 위치)가 하나의 '방문 지점'이 되었음을 의미함.
+            
+            if (algoState === "INIT" && visitedWaypoints.length === 0) {
+                // 첫 시작점 저장
+                visitedWaypoints.push({ ...myPos, type: 'START' });
+            } else {
+                // 이동 후 도착한 지점 저장 (숫자 마커용)
+                visitedWaypoints.push({ ...myPos, rssi: rssi });
+            }
+
+            // 로그 저장
             logData.push({
                 time: new Date().toISOString(),
                 state: algoState,
                 rssi: rssi,
                 myPos: { ...myPos },
                 targetPos: targetPos ? { ...targetPos } : null,
-                distToTarget: targetPos ? getDist(myPos, targetPos).toFixed(1) : 0,
                 prevBest: prevBestRssi
             });
             document.getElementById('btn-log').innerText = `로그 저장 (${logData.length})`;
 
+            // 성공 체크
             if (rssi >= PARAMS.TARGET_RSSI) {
                 alert("탐색 성공! (-55dBm 도달)");
                 algoState = "FINISHED";
-                draw(); // Draw Blue Star
+                draw();
                 return;
             }
 
+            // 1. INIT
             if (algoState === "IDLE" || algoState === "INIT") {
-                if (rssi < PARAMS.DEAD_ZONE) { alert("신호 너무 약함"); return; }
+                if (rssi < PARAMS.DEAD_ZONE) { alert("신호 너무 약함 (-80dBm 이하)"); return; }
                 
                 centerPos = { ...myPos };
                 prevBestRssi = rssi;
@@ -379,6 +399,7 @@
                 } else decide();
             }
             
+            // 2. SCANNING
             else if (algoState === "SCANNING") {
                 const done = scanQueue.shift();
                 if(done) scanRssi[done] = rssi;
@@ -395,6 +416,7 @@
                 }
             }
 
+            // 3. MOVING (Greedy)
             else if (algoState === "MOVING") {
                 if (rssi >= prevBestRssi - 1.0) {
                     prevBestRssi = rssi;
@@ -405,7 +427,7 @@
                     else if(rssi > -75) step = PARAMS.STEP.MID;
 
                     // [FIX] Greedy Step increased to 1.5x
-                    targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 2.0);
+                    targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 1.5);
                 } else {
                     failRssi = rssi;
                     failDir = lastDirName;
@@ -414,6 +436,7 @@
                 }
             }
 
+            // 4. BACKTRACK
             else if (algoState === "BACKTRACK") {
                 algoState = "INIT";
                 skipDir = null; 
