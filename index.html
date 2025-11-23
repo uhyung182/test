@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS Raw (Log Enabled)</title>
+    <title>GPS Raw (Icons & Numbers)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: none; }
@@ -23,14 +23,14 @@
 <body class="bg-gray-900 text-white flex flex-col h-screen p-4">
 
     <header class="text-center mb-2">
-        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Log Enabled)</h1>
+        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Icons & Numbers)</h1>
         <p id="status" class="text-xs text-gray-400">GPS 대기 중...</p>
     </header>
 
     <div class="relative flex-grow rounded-xl overflow-hidden border-2 border-gray-700 mb-4">
         <canvas id="mapCanvas" class="map-canvas"></canvas>
         
-        <button id="btn-center" class="absolute top-2 right-2 bg-gray-700/80 p-2 rounded text-xs border border-gray-500">📍 내 위치로</button>
+        <button id="btn-center" class="absolute top-2 right-2 bg-gray-700/80 p-2 rounded text-xs border border-gray-500 font-bold active:bg-gray-600">📍 내 위치로</button>
 
         <div class="absolute top-2 left-2 bg-black/60 p-2 rounded text-xs pointer-events-none">
             <div class="compass mb-2"><div id="arrow" class="direction-arrow"></div></div>
@@ -58,7 +58,7 @@
             </div>
         </div>
         
-        <button id="btn-start" class="w-full bg-green-600 py-3 rounded font-bold hidden">테스트 시작</button>
+        <button id="btn-start" class="w-full bg-green-600 py-3 rounded font-bold hidden active:scale-95 transition">테스트 시작</button>
         
         <button id="btn-log" class="w-full bg-gray-600 py-2 rounded text-xs text-gray-300 mt-2 hidden">로그 저장 (0)</button>
     </div>
@@ -80,7 +80,7 @@
         let originPos = null; 
         let phoneHeading = 0;
         let pathHistory = []; 
-        let logData = []; // 로그 데이터 저장소
+        let logData = []; 
 
         let algoState = "IDLE";
         let scanQueue = [];
@@ -128,7 +128,6 @@
             if (!originPos) return { x: 0, y: 0 };
             const d = getDist(originPos, pos);
             const b = getBearing(originPos, pos);
-            const rad = (b - 90) * Math.PI / 180; 
             const radB = (b - 90) * Math.PI / 180;
             return {
                 x: d * Math.cos(radB),
@@ -151,7 +150,11 @@
                 myPos = { lat: latitude, lon: longitude };
                 
                 if (!originPos) originPos = { ...myPos }; 
-                pathHistory.push({ ...myPos });
+                
+                // [FIX] 중복 좌표 방지 (너무 가까우면 저장 안 함)
+                if (pathHistory.length === 0 || getDist(pathHistory[pathHistory.length-1], myPos) > 2.0) {
+                    pathHistory.push({ ...myPos });
+                }
 
                 document.getElementById('gps-lat').innerText = `Lat: ${latitude.toFixed(5)}`;
                 document.getElementById('gps-lon').innerText = `Lon: ${longitude.toFixed(5)}`;
@@ -201,6 +204,7 @@
             ctx.scale(cam.zoom, cam.zoom);
             ctx.translate(-cam.x, -cam.y);
 
+            // 1. Grid
             ctx.strokeStyle = '#333';
             ctx.lineWidth = 1 / cam.zoom;
             const gridSize = 10;
@@ -218,7 +222,9 @@
             }
             ctx.stroke();
 
-            if (pathHistory.length > 1) {
+            // 2. Path & Numbers
+            if (pathHistory.length > 0) {
+                // Draw Line
                 ctx.strokeStyle = '#888';
                 ctx.lineWidth = 2 / cam.zoom;
                 ctx.beginPath();
@@ -229,9 +235,32 @@
                     ctx.lineTo(p.x, p.y);
                 }
                 ctx.stroke();
+
+                // Draw Numbers (Waypoints)
+                ctx.fillStyle = '#FFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `${12/cam.zoom}px Arial`;
+                
+                pathHistory.forEach((pos, idx) => {
+                    const p = latlonToXY(pos);
+                    ctx.beginPath();
+                    ctx.fillStyle = '#555';
+                    ctx.arc(p.x, p.y, 8/cam.zoom, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.fillStyle = '#FFF';
+                    ctx.fillText(idx + 1, p.x, p.y);
+                });
+
+                // [NEW] Start Point (Yellow Star)
+                const s = latlonToXY(pathHistory[0]);
+                ctx.fillStyle = '#FFD700'; // Gold
+                ctx.font = `${20/cam.zoom}px Arial`;
+                ctx.fillText('★', s.x, s.y - 15/cam.zoom);
             }
 
-            if (targetPos) {
+            // 3. Target (Current)
+            if (targetPos && algoState !== "FINISHED") {
                 const t = latlonToXY(targetPos);
                 ctx.fillStyle = 'red';
                 ctx.beginPath(); ctx.arc(t.x, t.y, 6 / cam.zoom, 0, Math.PI*2); ctx.fill();
@@ -246,13 +275,23 @@
                 document.getElementById('arrow').style.transform = `translate(-50%, -100%) rotate(${arrowDeg}deg)`;
             }
 
+            // 4. Me
             const m = latlonToXY(myPos);
             ctx.fillStyle = '#10B981';
             ctx.beginPath(); ctx.arc(m.x, m.y, 8 / cam.zoom, 0, Math.PI*2); ctx.fill();
 
+            // [NEW] End Point (Blue Star) - Only when Finished
+            if (algoState === "FINISHED") {
+                const last = latlonToXY(myPos);
+                ctx.fillStyle = '#3B82F6'; // Blue
+                ctx.font = `${24/cam.zoom}px Arial`;
+                ctx.fillText('★', last.x, last.y - 20/cam.zoom);
+            }
+
             ctx.restore();
         }
 
+        // --- Touch Controls ---
         let touchStart = { x: 0, y: 0, dist: 0 };
         let camStart = { x: 0, y: 0, zoom: 1 };
 
@@ -296,9 +335,8 @@
             draw();
         };
 
-        // --- Algorithm (Ver3 Logic) ---
+        // --- Algorithm ---
         const processAlgo = (rssi) => {
-            // [LOGGING] 현재 상태 기록
             logData.push({
                 time: new Date().toISOString(),
                 state: algoState,
@@ -313,10 +351,10 @@
             if (rssi >= PARAMS.TARGET_RSSI) {
                 alert("탐색 성공! (-55dBm 도달)");
                 algoState = "FINISHED";
+                draw(); // Draw Blue Star
                 return;
             }
 
-            // 1. INIT
             if (algoState === "IDLE" || algoState === "INIT") {
                 if (rssi < PARAMS.DEAD_ZONE) { alert("신호 너무 약함"); return; }
                 
@@ -341,7 +379,6 @@
                 } else decide();
             }
             
-            // 2. SCANNING
             else if (algoState === "SCANNING") {
                 const done = scanQueue.shift();
                 if(done) scanRssi[done] = rssi;
@@ -358,7 +395,6 @@
                 }
             }
 
-            // 3. MOVING (Greedy)
             else if (algoState === "MOVING") {
                 if (rssi >= prevBestRssi - 1.0) {
                     prevBestRssi = rssi;
@@ -368,7 +404,8 @@
                     if(rssi > -65) step = PARAMS.STEP.NEAR;
                     else if(rssi > -75) step = PARAMS.STEP.MID;
 
-                    targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 1.2);
+                    // [FIX] Greedy Step increased to 1.5x
+                    targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 2.0);
                 } else {
                     failRssi = rssi;
                     failDir = lastDirName;
@@ -377,7 +414,6 @@
                 }
             }
 
-            // 4. BACKTRACK
             else if (algoState === "BACKTRACK") {
                 algoState = "INIT";
                 skipDir = null; 
@@ -418,7 +454,7 @@
             if(!myPos) return;
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('input-area').classList.remove('hidden');
-            document.getElementById('btn-log').classList.remove('hidden'); // 로그 버튼 표시
+            document.getElementById('btn-log').classList.remove('hidden'); 
             document.getElementById('msg').innerText = "시작점 RSSI 입력";
             
             if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
@@ -436,12 +472,11 @@
             processAlgo(val);
         };
 
-        // [LOG DOWNLOAD]
         document.getElementById('btn-log').onclick = () => {
             const blob = new Blob([JSON.stringify(logData, null, 2)], {type:'application/json'});
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `gps_log_${new Date().toISOString().slice(0,19).replace(/:/g,"-")}.json`;
+            a.download = 'walk_test_log.json';
             a.click();
         };
     </script>
