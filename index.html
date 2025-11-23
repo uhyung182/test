@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>GPS 테스터 (Raw Absolute)</title>
+    <title>GPS Raw (Path & Zoom)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; touch-action: none; }
@@ -23,19 +23,21 @@
 <body class="bg-gray-900 text-white flex flex-col h-screen p-4">
 
     <header class="text-center mb-2">
-        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Absolute)</h1>
+        <h1 class="text-xl font-bold text-cyan-400">GPS Raw (Path & Zoom)</h1>
         <p id="status" class="text-xs text-gray-400">GPS 대기 중...</p>
     </header>
 
     <div class="relative flex-grow rounded-xl overflow-hidden border-2 border-gray-700 mb-4">
         <canvas id="mapCanvas" class="map-canvas"></canvas>
         
-        <div class="absolute top-2 left-2 bg-black/60 p-2 rounded text-xs">
+        <button id="btn-center" class="absolute top-2 right-2 bg-gray-700/80 p-2 rounded text-xs border border-gray-500">📍 내 위치로</button>
+
+        <div class="absolute top-2 left-2 bg-black/60 p-2 rounded text-xs pointer-events-none">
             <div class="compass mb-2"><div id="arrow" class="direction-arrow"></div></div>
             <div>목표: <span id="bearing" class="text-cyan-300">0°</span></div>
             <div>나: <span id="heading" class="text-green-300">0°</span></div>
         </div>
-        <div class="absolute bottom-2 right-2 bg-black/60 p-2 rounded text-xs text-right">
+        <div class="absolute bottom-2 right-2 bg-black/60 p-2 rounded text-xs text-right pointer-events-none">
             <div id="gps-lat">Lat: -</div>
             <div id="gps-lon">Lon: -</div>
             <div id="gps-acc" class="text-yellow-300">Acc: -</div>
@@ -62,37 +64,34 @@
     <script>
         // --- Constants ---
         const PARAMS = {
-            ARRIVAL_DIST: 6.0,    // 6m 이내 도착
-            TARGET_RSSI: -55.0,   // 목표 신호
-            DEAD_ZONE: -80.0,     // 탐색 제외
-            // 이동 거리 (미터 단위)
+            ARRIVAL_DIST: 6.0,    
+            TARGET_RSSI: -55.0,   
+            DEAD_ZONE: -80.0,     
             STEP: { FAR: 30, MID: 15, NEAR: 5 },
             SCAN: { FAR: 30, MID: 15, NEAR: 8 }
         };
 
         // --- Globals ---
-        let myPos = null;   // {lat, lon}
-        let targetPos = null; // {lat, lon}
-        let centerPos = null; // {lat, lon} 베이스캠프
+        let myPos = null;   
+        let targetPos = null; 
+        let centerPos = null; 
         let phoneHeading = 0;
-        
+        let pathHistory = []; // 경로 저장용
+
         let algoState = "IDLE";
         let scanQueue = [];
         let scanRssi = {};
-        
-        // Greedy Logic Variables
         let prevBestRssi = -999;
         let lastDirName = null;
         let skipDir = null;
         let failRssi = null; 
         let failDir = null;
 
-        // Map View
-        const ZOOM_LEVEL = 18; // 기본 줌 (미터/픽셀 변환용)
-        let pixelsPerMeter = 2.5; // 화면 배율
+        // Map View State
+        let cam = { x: 0, y: 0, zoom: 2.5 }; // Zoom 2.5 = pixels per meter
+        let isTracking = true; // 내 위치 자동 추적 모드
 
         // --- Utils ---
-        // Haversine: 두 좌표 사이 거리 (m)
         function getDist(p1, p2) {
             if(!p1 || !p2) return 0;
             const R = 6371e3;
@@ -103,7 +102,6 @@
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         }
 
-        // Bearing: 두 좌표 사이 방위각 (0~360)
         function getBearing(p1, p2) {
             if(!p1 || !p2) return 0;
             const y = Math.sin(p2.lon*Math.PI/180 - p1.lon*Math.PI/180) * Math.cos(p2.lat*Math.PI/180);
@@ -112,7 +110,6 @@
             return (Math.atan2(y, x) * 180/Math.PI + 360) % 360;
         }
 
-        // Move: 특정 방위(bearing)로 거리(dist)만큼 이동한 새 좌표
         function moveCoord(start, bearing, dist) {
             const R = 6371e3;
             const δ = dist / R;
@@ -124,16 +121,27 @@
             return { lat: φ2 * 180/Math.PI, lon: λ2 * 180/Math.PI };
         }
 
-        // Directions (Bearing)
-        const DIRS = {
-            'up': 0, 'right': 90, 'down': 180, 'left': 270
-        };
+        // 위도/경도 -> 미터(m) 상대 좌표 변환 (첫 위치 기준)
+        // 화면 그리기용. 첫 GPS 수신 위치를 (0,0)으로 잡음.
+        let originPos = null;
+        function latlonToXY(pos) {
+            if (!originPos) return { x: 0, y: 0 };
+            const d = getDist(originPos, pos);
+            const b = getBearing(originPos, pos);
+            // Canvas: Y is down, Bearings: 0 is Up(N)
+            // xy: x = d*sin(b), y = -d*cos(b)
+            const rad = b * Math.PI / 180;
+            return {
+                x: d * Math.sin(rad),
+                y: -d * Math.cos(rad)
+            };
+        }
+
+        const DIRS = { 'up': 0, 'right': 90, 'down': 180, 'left': 270 };
 
         // --- App Logic ---
         const cvs = document.getElementById('mapCanvas');
         const ctx = cvs.getContext('2d');
-        
-        // Resize
         const resize = () => { cvs.width = cvs.parentElement.clientWidth; cvs.height = cvs.parentElement.clientHeight; };
         window.addEventListener('resize', resize); resize();
 
@@ -143,21 +151,20 @@
                 const { latitude, longitude, accuracy } = pos.coords;
                 myPos = { lat: latitude, lon: longitude };
                 
+                if (!originPos) originPos = { ...myPos }; // 첫 위치를 원점으로
+                pathHistory.push({ ...myPos }); // 경로 저장
+
                 document.getElementById('gps-lat').innerText = `Lat: ${latitude.toFixed(5)}`;
                 document.getElementById('gps-lon').innerText = `Lon: ${longitude.toFixed(5)}`;
                 document.getElementById('gps-acc').innerText = `Acc: ±${accuracy.toFixed(1)}m`;
                 
-                // 시작 버튼 활성화 (최초 1회)
                 document.getElementById('btn-start').classList.remove('hidden');
                 document.getElementById('status').innerText = "GPS 수신 중";
 
-                // 도착 체크
                 if (targetPos && algoState !== "IDLE") {
                     const d = getDist(myPos, targetPos);
                     document.getElementById('target-dist').innerText = d.toFixed(1) + "m";
-                    
                     if (d < PARAMS.ARRIVAL_DIST) {
-                        // 도착!
                         document.getElementById('input-area').classList.remove('hidden');
                         document.getElementById('msg').innerText = "도착! RSSI 입력";
                         if(navigator.vibrate) navigator.vibrate(200);
@@ -169,7 +176,6 @@
             { enableHighAccuracy: true, maximumAge: 0 }
         );
 
-        // Orientation
         window.addEventListener('deviceorientation', e => {
             if(e.webkitCompassHeading) phoneHeading = e.webkitCompassHeading;
             else if(e.alpha) phoneHeading = (360 - e.alpha) % 360;
@@ -185,55 +191,122 @@
             const cx = cvs.width / 2;
             const cy = cvs.height / 2;
 
-            // Grid
+            // 내 위치 추적 모드일 때 카메라 중심 이동
+            if (isTracking) {
+                const myXY = latlonToXY(myPos);
+                cam.x = myXY.x;
+                cam.y = myXY.y;
+            }
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(cam.zoom, cam.zoom);
+            ctx.translate(-cam.x, -cam.y); // 카메라 이동
+
+            // 1. Grid (10m 간격)
             ctx.strokeStyle = '#333';
-            ctx.lineWidth = 1;
+            ctx.lineWidth = 1 / cam.zoom;
+            const gridSize = 10;
+            const left = cam.x - (cx / cam.zoom);
+            const right = cam.x + (cx / cam.zoom);
+            const top = cam.y - (cy / cam.zoom);
+            const bottom = cam.y + (cy / cam.zoom);
+            
             ctx.beginPath();
-            ctx.moveTo(cx, 0); ctx.lineTo(cx, cvs.height);
-            ctx.moveTo(0, cy); ctx.lineTo(cvs.width, cy);
+            for (let x = Math.floor(left/gridSize)*gridSize; x < right; x += gridSize) {
+                ctx.moveTo(x, top); ctx.lineTo(x, bottom);
+            }
+            for (let y = Math.floor(top/gridSize)*gridSize; y < bottom; y += gridSize) {
+                ctx.moveTo(left, y); ctx.lineTo(right, y);
+            }
             ctx.stroke();
 
-            // Target
-            if (targetPos) {
-                // 내 위치(myPos)가 항상 화면 중앙(cx, cy)임.
-                // 타겟의 상대 위치 계산 (미터 단위 -> 픽셀 변환)
-                const d = getDist(myPos, targetPos);
-                const b = getBearing(myPos, targetPos);
-                
-                // 화면상 좌표 (북쪽이 위)
-                // bearing 0(N) -> dy -, dx 0
-                // bearing 90(E) -> dy 0, dx +
-                const rad = (b - 90) * Math.PI / 180; // Canvas는 0도가 3시 방향이라 보정
-                const tx = cx + Math.cos(rad) * d * pixelsPerMeter; // 90도 회전? 아니, bearing 그대로 씀
-                
-                // Bearing to XY:
-                // 0 deg (Up) -> x=0, y=-d
-                // 90 deg (Right) -> x=d, y=0
-                const bx = Math.sin(b * Math.PI/180) * d * pixelsPerMeter;
-                const by = -Math.cos(b * Math.PI/180) * d * pixelsPerMeter;
-
-                ctx.fillStyle = 'red';
-                ctx.beginPath(); 
-                ctx.arc(cx + bx, cy + by, 8, 0, Math.PI*2); 
-                ctx.fill();
-                
-                // Arrival Zone
-                ctx.strokeStyle = 'red';
+            // 2. Path (경로 그리기)
+            if (pathHistory.length > 1) {
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 2 / cam.zoom;
                 ctx.beginPath();
-                ctx.arc(cx + bx, cy + by, PARAMS.ARRIVAL_DIST * pixelsPerMeter, 0, Math.PI*2);
+                const start = latlonToXY(pathHistory[0]);
+                ctx.moveTo(start.x, start.y);
+                for (let i = 1; i < pathHistory.length; i++) {
+                    const p = latlonToXY(pathHistory[i]);
+                    ctx.lineTo(p.x, p.y);
+                }
                 ctx.stroke();
+            }
 
-                // Update Compass UI
+            // 3. Target
+            if (targetPos) {
+                const t = latlonToXY(targetPos);
+                ctx.fillStyle = 'red';
+                ctx.beginPath(); ctx.arc(t.x, t.y, 6 / cam.zoom, 0, Math.PI*2); ctx.fill();
+                
+                // Arrival Zone Ring
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 1 / cam.zoom;
+                ctx.beginPath(); ctx.arc(t.x, t.y, PARAMS.ARRIVAL_DIST, 0, Math.PI*2); ctx.stroke();
+
+                // Compass Arrow Update
                 const targetB = getBearing(myPos, targetPos);
                 document.getElementById('bearing').innerText = targetB.toFixed(0) + "°";
                 const arrowDeg = targetB - phoneHeading;
                 document.getElementById('arrow').style.transform = `translate(-50%, -100%) rotate(${arrowDeg}deg)`;
             }
 
-            // Me (Always Center)
+            // 4. Me (Green Dot)
+            const m = latlonToXY(myPos);
             ctx.fillStyle = '#10B981';
-            ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(m.x, m.y, 8 / cam.zoom, 0, Math.PI*2); ctx.fill();
+            // Heading Line
+            // ctx.strokeStyle = '#10B981';
+            // ctx.beginPath(); ctx.moveTo(m.x, m.y); 
+            // ctx.lineTo(m.x + Math.sin(phoneHeading*Math.PI/180)*10, m.y - Math.cos(phoneHeading*Math.PI/180)*10);
+            // ctx.stroke();
+
+            ctx.restore();
         }
+
+        // --- Touch Controls (Zoom & Pan) ---
+        let touchStart = { x: 0, y: 0, dist: 0 };
+        let camStart = { x: 0, y: 0, zoom: 1 };
+
+        cvs.addEventListener('touchstart', e => {
+            if (e.touches.length === 1) {
+                isTracking = false; // 드래그 시 추적 해제
+                touchStart.x = e.touches[0].clientX;
+                touchStart.y = e.touches[0].clientY;
+                camStart.x = cam.x;
+                camStart.y = cam.y;
+            } else if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                touchStart.dist = Math.sqrt(dx*dx + dy*dy);
+                camStart.zoom = cam.zoom;
+            }
+        }, { passive: false });
+
+        cvs.addEventListener('touchmove', e => {
+            e.preventDefault(); // 스크롤 방지
+            if (e.touches.length === 1) {
+                const dx = (e.touches[0].clientX - touchStart.x) / cam.zoom;
+                const dy = (e.touches[0].clientY - touchStart.y) / cam.zoom;
+                cam.x = camStart.x - dx;
+                cam.y = camStart.y - dy;
+                draw();
+            } else if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                cam.zoom = Math.max(0.5, Math.min(10, camStart.zoom * (dist / touchStart.dist)));
+                draw();
+            }
+        }, { passive: false });
+
+        document.getElementById('btn-center').onclick = () => {
+            isTracking = true;
+            cam.zoom = 2.5;
+            draw();
+        };
 
         // --- Algorithm (Ver3 Logic) ---
         const processAlgo = (rssi) => {
@@ -251,16 +324,13 @@
                 prevBestRssi = rssi;
                 scanRssi = {};
                 
-                // Adaptive Radius
                 let r = PARAMS.SCAN.FAR;
                 if(rssi > -65) r = PARAMS.SCAN.NEAR;
                 else if(rssi > -75) r = PARAMS.SCAN.MID;
 
-                // Queue: Up, Right, Down, Left
                 const order = ['up', 'right', 'down', 'left'];
                 scanQueue = order.filter(d => d !== skipDir && d !== failDir);
                 
-                // Reuse failed data if exists
                 if(failDir) scanRssi[failDir] = failRssi;
                 failDir = null;
 
@@ -278,8 +348,7 @@
                 
                 if (scanQueue.length > 0) {
                     const next = scanQueue[0];
-                    // 반경 재계산 필요 없음 (같은 중심)
-                    let r = PARAMS.SCAN.FAR; // Simple fallback
+                    let r = PARAMS.SCAN.FAR; 
                     if(prevBestRssi > -65) r = PARAMS.SCAN.NEAR;
                     else if(prevBestRssi > -75) r = PARAMS.SCAN.MID;
 
@@ -291,11 +360,9 @@
 
             // 3. MOVING (Greedy)
             else if (algoState === "MOVING") {
-                // Check if improved
                 if (rssi >= prevBestRssi - 1.0) {
-                    // Good! Keep going
                     prevBestRssi = rssi;
-                    centerPos = { ...myPos }; // Update Base
+                    centerPos = { ...myPos }; 
                     
                     let step = PARAMS.STEP.FAR;
                     if(rssi > -65) step = PARAMS.STEP.NEAR;
@@ -303,20 +370,18 @@
 
                     targetPos = moveCoord(centerPos, DIRS[lastDirName], step * 1.2);
                 } else {
-                    // Bad! Backtrack
                     failRssi = rssi;
                     failDir = lastDirName;
-                    targetPos = { ...centerPos }; // Go back
+                    targetPos = { ...centerPos }; 
                     algoState = "BACKTRACK";
                 }
             }
 
             // 4. BACKTRACK
             else if (algoState === "BACKTRACK") {
-                // Arrived back at center. Restart Scan.
                 algoState = "INIT";
                 skipDir = null; 
-                processAlgo(rssi); // Recursion with current(center) rssi
+                processAlgo(rssi); 
             }
 
             document.getElementById('algo-state').innerText = algoState;
@@ -340,7 +405,6 @@
             targetPos = moveCoord(centerPos, DIRS[bestDir], step);
             lastDirName = bestDir;
             
-            // Set Skip (Opposite)
             if(bestDir=='up') skipDir='down';
             if(bestDir=='down') skipDir='up';
             if(bestDir=='left') skipDir='right';
@@ -358,7 +422,6 @@
             algoState = "INIT";
             document.getElementById('algo-state').innerText = algoState;
             
-            // iOS Permission
             if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission();
             }
